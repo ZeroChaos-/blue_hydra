@@ -80,6 +80,9 @@ module BlueHydra
     old_config = {}
   end
 
+  old_config["ui_inc_filter_mac"].map{|mac|mac.upcase!} if old_config["ui_inc_filter_mac"]
+  old_config["ui_inc_filter_prox"].map{|prox|prox.downcase!} if old_config["ui_inc_filter_prox"]
+
   config_base = DEFAULT_CONFIG.merge(old_config)
 
   # Create config file with defaults if missing or load and update.
