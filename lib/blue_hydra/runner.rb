@@ -472,12 +472,25 @@ module BlueHydra
               bluetoothd_errors += 1
               begin
               if bluetoothd_errors == 1
+                if ::File.executable?(`which service 2> /dev/null`.chomp)
+                  service = "service"
+                elsif ::File.executable?(`which rc-service 2> /dev/null`.chomp)
+                  service = "rc-service"
+                else
+                  service = false
+                end
+
                 # Is bluetoothd running?
                 bluetoothd_pid = `pgrep bluetoothd`.chomp
                 unless bluetoothd_pid == ""
                   # Does init own bluetoothd?
                   if `ps -o ppid= #{bluetoothd_pid}`.chomp =~ /\s1/
-                    bluetoothd_restart = BlueHydra::Command.execute3("service bluetooth restart")
+                    if service
+                      bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
+                    else
+                      bluetoothd_restart ||= {}
+                      bluetoothd_restart[:exit_code] == 127
+                    end
                     sleep 3
                   else
                     # not controled by init, bail
@@ -496,7 +509,12 @@ module BlueHydra
                   end
                 else
                   # bluetoothd isn't running at all, attempt to restart through init
-                  bluetoothd_restart = BlueHydra::Command.execute3("service bluetooth restart")
+                  if service
+                    bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
+                  else
+                    bluetoothd_restart ||= {}
+                    bluetoothd_restart[:exit_code] == 127
+                  end
                   sleep 3
                 end
                 unless bluetoothd_restart[:exit_code] == 0
@@ -517,6 +535,7 @@ module BlueHydra
                 unless BlueHydra.daemon_mode
                   self.cui_thread.kill if self.cui_thread
                   puts "Bluetoothd is not functioning as expected and auto-restart failed."
+                  puts 'Unable to control system services, "service" and "rc-service" are both missing?' unless service
                   puts "Please restart bluetoothd and try again."
                 end
                 if bluetoothd_restart[:stderr]
