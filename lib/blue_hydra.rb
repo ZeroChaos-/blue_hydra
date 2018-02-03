@@ -80,14 +80,14 @@ module BlueHydra
     old_config = {}
   end
 
-  old_config["ui_inc_filter_mac"].map{|mac|mac.upcase!} if old_config["ui_inc_filter_mac"]
-  old_config["ui_inc_filter_prox"].map{|prox|prox.downcase!} if old_config["ui_inc_filter_prox"]
-
   config_base = DEFAULT_CONFIG.merge(old_config)
 
   # Create config file with defaults if missing or load and update.
   @@config = if File.exists?(CONFIG_FILE)
-               config_base.merge(YAML.load(File.read(CONFIG_FILE)))
+               new_config = YAML.load(File.read(CONFIG_FILE))
+               new_config["ui_inc_filter_mac"].map{|mac|mac.upcase!} if new_config["ui_inc_filter_mac"]
+               new_config["ui_inc_filter_prox"].map{|prox|prox.downcase!} if new_config["ui_inc_filter_prox"]
+               config_base.merge(new_config)
              else
                config_base
              end
