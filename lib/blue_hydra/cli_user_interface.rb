@@ -70,13 +70,13 @@ The "VERS" column in the following table shows mode and version if available.
 
 The "RANGE" column shows distance in meters from the device if known.
 
-Press "f" to change filter mode to the next setting (then enter)
-Press "F" to change filter mode to the previous setting (then enter)
-Press "s" to change sort to the next column to the right (then enter)
-Press "S" to change sort to the next column to the left (then enter)
-Press "r" to reverse the sort order (then enter)
-Press "c" to change the column set (then enter)
-Press "q" to exit (then enter)
+Press "f" to change filter mode to the next setting
+Press "F" to change filter mode to the previous setting
+Press "s" to change sort to the next column to the right
+Press "S" to change sort to the next column to the left
+Press "r" to reverse the sort order
+Press "c" to change the column set
+Press "q" to exit
 
 press [Enter] key to continue....
 HELP
@@ -89,6 +89,7 @@ $stdin.gets.chomp
     # the main work loop which prints the actual data to screen
     def cui_loop
       reset         = false # determine if we need to reset the loop by restarting method
+      paused        = false
       sort        ||= :_seen # default sort attribute
       filter_mode   = BlueHydra.config["ui_filter_mode"]
       order       ||= "ascending" #default sort order
@@ -141,10 +142,19 @@ $stdin.gets.chomp
         end
 
         # read 1 character from standard in
+        system('stty raw -echo')
         input = STDIN.read_nonblock(1) rescue nil
+        system('stty -raw echo')
 
         # handle the input character
         case
+        when " " == input
+          if paused
+            paused = false
+          else
+            paused = true
+            puts "*** paused ***"
+          end
         when ["q","Q"].include?(input) # bail out yo
           exit
         when input == "f" # change filter mode forward
@@ -230,7 +240,9 @@ $stdin.gets.chomp
 
         # render the cui with and get back list of currently sortable keys for
         # next iteration of loop
-        sortable_keys = render_cui(max_height,sort,order,printable_keys,filter_mode)
+        unless paused
+          sortable_keys = render_cui(max_height,sort,order,printable_keys,filter_mode)
+        end
         if sortable_keys.nil? || !sortable_keys.include?(sort)
           # if we have remove the column we were sorting on
           # reset the sort order to the default
