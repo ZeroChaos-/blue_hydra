@@ -142,9 +142,12 @@ $stdin.gets.chomp
         end
 
         # read 1 character from standard in
-        system('stty raw -echo')
-        input = STDIN.read_nonblock(1) rescue nil
-        system('stty -raw echo')
+        begin
+          system('stty raw -echo')
+          input = STDIN.read_nonblock(1) rescue nil
+        ensure
+          system('stty -raw echo')
+        end
 
         # handle the input character
         case
