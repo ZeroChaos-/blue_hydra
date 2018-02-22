@@ -6,12 +6,7 @@ both classic and low energy (LE) bluetooth devices over time.
 
 ## Installation
 
-### Pwnie Sensor
-On a Pwnie Express sensor this will be installed as a system service with 
-the regular updates. 
-
-### Non Pwnie device
-On non Pwnie Express systems the files in this repository can be run directly. 
+The files in this repository can be run directly.
 
 Ensure that the following packages are installed: 
 
