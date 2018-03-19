@@ -176,7 +176,7 @@ class BlueHydra::Device
     %w{
       address name manufacturer short_name lmp_version firmware
       classic_major_class classic_minor_class le_tx_power classic_tx_power
-      le_address_type company company_type appearance le_address_type
+      le_address_type company company_type appearance
       le_random_address_type le_company_uuid le_company_data le_proximity_uuid
       le_major_num le_minor_num classic_mode le_mode
     }.map(&:to_sym).each do |attr|
@@ -537,7 +537,7 @@ class BlueHydra::Device
     type = type.split(' ')[0]
     if type =~ /Public/
       self[:le_address_type] = type
-      self[:le_random_address_type] = nil if le_address_type
+      self[:le_random_address_type] = nil if self.le_address_type
     elsif type =~ /Random/
       self[:le_address_type] = type
     end
