@@ -330,7 +330,14 @@ module BlueHydra
       self.discovery_thread = Thread.new do
         begin
 
-          discovery_command = "#{File.expand_path('../../../bin/test-discovery', __FILE__)} -i #{BlueHydra.config["bt_device"]}"
+          if BlueHydra.info_scan
+            discovery_time    = 30
+            discovery_timeout = 45
+          else
+            discovery_time    = 180
+            discovery_timeout = 195
+          end
+          discovery_command = "#{File.expand_path('../../../bin/test-discovery', __FILE__)} --timeout #{discovery_time} -i #{BlueHydra.config["bt_device"]}"
 
           loop do
             begin
@@ -439,7 +446,7 @@ module BlueHydra
               # run test-discovery
               # do a discovery
               self.scanner_status[:test_discovery] = Time.now.to_i unless BlueHydra.daemon_mode
-              discovery_errors = BlueHydra::Command.execute3(discovery_command,45)[:stderr]
+              discovery_errors = BlueHydra::Command.execute3(discovery_command,discovery_timeout)[:stderr]
               if discovery_errors
                 if discovery_errors =~ /org.bluez.Error.NotReady/
                   raise BluezNotReadyError
@@ -702,9 +709,11 @@ module BlueHydra
       # only scan if the info scan rate timeframe has elapsed
       self.query_history[track_addr] ||= {}
       last_info = self.query_history[track_addr][mode].to_i
-      if (Time.now.to_i - (BlueHydra.config["info_scan_rate"].to_i * 60)) >= last_info
-        info_scan_queue.push({command: command, address: address})
-        self.query_history[track_addr][mode] = Time.now.to_i
+      if BlueHydra.info_scan
+        if (Time.now.to_i - (BlueHydra.config["info_scan_rate"].to_i * 60)) >= last_info
+          info_scan_queue.push({command: command, address: address})
+          self.query_history[track_addr][mode] = Time.now.to_i
+        end
       end
     end
 

@@ -29,6 +29,8 @@ if __name__ == '__main__':
 	option_list = [
 			make_option("-i", "--device", action="store",
 					type="string", dest="dev_id"),
+			make_option("-t", "--timeout", action="store",
+					type="int", dest="timeout"),
 			]
 	parser = OptionParser(option_list=option_list)
 
@@ -41,5 +43,5 @@ if __name__ == '__main__':
 					signal_name = "PropertyChanged")
 
 	adapter.StartDiscovery()
-	time.sleep(30)
+	time.sleep(options.timeout)
 	adapter.StopDiscovery()

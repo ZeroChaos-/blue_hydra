@@ -264,10 +264,23 @@ module BlueHydra
     @@signal_spitter = setting
   end
 
+  def info_scan
+    if defined? @@info_scan
+      return @@info_scan
+    else
+      return true
+    end
+  end
+
+  def info_scan=(setting)
+    @@info_scan = setting
+  end
+
   module_function :logger, :config, :daemon_mode, :daemon_mode=, :pulse,
                   :pulse=, :rssi_logger, :demo_mode, :demo_mode=,
                   :pulse_debug, :pulse_debug=, :no_db, :no_db=,
-                  :signal_spitter, :signal_spitter=, :chunk_logger
+                  :signal_spitter, :signal_spitter=, :chunk_logger,
+                  :info_scan, :info_scan=
 end
 
 # require the actual code

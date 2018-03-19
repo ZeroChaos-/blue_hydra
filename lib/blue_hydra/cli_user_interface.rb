@@ -33,7 +33,11 @@ module BlueHydra
     end
 
     def info_scan_queue
-      @runner.info_scan_queue
+      if BlueHydra.info_scan
+        return @runner.info_scan_queue.length
+      else
+        return "disabled"
+      end
     end
 
     def l2ping_queue
@@ -322,7 +326,7 @@ $stdin.gets.chomp
         # second line, information about runner queues to help determine if we
         # have a backlog. backlogs mean that the data being displayed may be
         # delayed
-        pbuff << "Queue status: result_queue: #{result_queue.length}, info_scan_queue: #{info_scan_queue.length}, l2ping_queue: #{l2ping_queue.length}\n"
+        pbuff << "Queue status: result_queue: #{result_queue.length}, info_scan_queue: #{info_scan_queue}, l2ping_queue: #{l2ping_queue.length}\n"
         lines += 1
 
         # unless we are reading from a file we add a line with information

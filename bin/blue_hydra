@@ -32,6 +32,9 @@ OptionParser.new do |opts|
   opts.on("--rssi-api", "Open 127.0.0.1:1124 to allow other processes to poll for seen devices and rssi") do |v|
     options[:signal_spitter] = true
   end
+  opts.on("--no-info", "For the purposes for fox hunting, don't info scan.  Some info may be missing, but there will be less gaps during tracking") do |v|
+    options[:no_info_scan] = true
+  end
   opts.on_tail("-h", "--help", "Show this message") do
     puts opts
     exit
@@ -89,6 +92,12 @@ if options[:signal_spitter] || BlueHydra.config["signal_spitter"]
   # we also need json and socket but those are unconditional requirements of pulse (which should be conditional)
 else
   BlueHydra.signal_spitter = false
+end
+
+if options[:no_info_scan]
+  BlueHydra.info_scan = false
+else
+  BlueHydra.info_scan = true
 end
 
 if BlueHydra.pulse
