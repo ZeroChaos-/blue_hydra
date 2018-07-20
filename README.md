@@ -93,6 +93,9 @@ Usage: BlueHydra [options]
     -p, --pulse                      Send results to hermes
         --pulse-debug                Store results in a file for review
         --no-db                      Keep db in ram only
+        --rssi-api                   Open 127.0.0.1:1124 to allow other processes to poll for seen devices and rssi
+        --no-info                    For the purposes for fox hunting, don't info scan.  Some info may be missing, but there will be less gaps during tracking
+
     -h, --help                       Show this message
 ```
 
