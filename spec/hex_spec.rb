@@ -1,3 +1,5 @@
+return if ENV["PN"] = "blue_hydra"
+
 `mkdir /usr/src/bluez`
 `chmod 777 /usr/src/bluez`
 `cd /usr/src/bluez; apt-get source bluez`
