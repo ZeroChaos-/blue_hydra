@@ -46,7 +46,9 @@ module BlueHydra
 
   # Config file located in /opt/pwnix/pwnix-config/blue_hydra.yml on sensors
   # or in the local directory if run on a non-Pwnie device.
-  CONFIG_FILE = if Dir.exists?('/etc/blue_hydra')
+  CONFIG_FILE = if ENV["BLUE_HYDRA"] == "test"
+              File.expand_path('../../blue_hydra.yml', __FILE__)
+            elsif Dir.exists?('/etc/blue_hydra')
               '/etc/blue_hydra/blue_hydra.yml'
             elsif Dir.exists?('/opt/pwnix/data/blue_hydra')
               '/opt/pwnix/data/blue_hydra/blue_hydra.yml'
