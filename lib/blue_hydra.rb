@@ -185,7 +185,9 @@ module BlueHydra
   #
   # Logs will be written to /var/log/pwnix/blue_hydra_chunk.log on a sensor or
   # in the local directory as blue_hydra_chunk.log if on a non-Pwnie system
-  CHUNK_LOGFILE = if Dir.exists?('/var/log/blue_hydra')
+  CHUNK_LOGFILE = if ENV["BLUE_HYDRA"] == "test"
+              File.expand_path('../../blue_hydra_chunk.log' __FILE__)
+            elsif Dir.exists?('/var/log/blue_hydra')
               File.expand_path('/var/log/blue_hydra/blue_hydra_chunk.log', __FILE__)
             elsif Dir.exists?('/var/log/pwnix')
               File.expand_path('/var/log/pwnix/blue_hydra_chunk.log', __FILE__)
