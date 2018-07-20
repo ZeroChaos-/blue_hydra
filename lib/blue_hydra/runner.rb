@@ -120,7 +120,9 @@ module BlueHydra
 
         # another thread which operates the actual device discovery, not needed
         # if reading from a file since btmon will just be getting replayed
-        start_discovery_thread unless BlueHydra.config["file"]
+        unless ENV["BLUE_HYDRA"] == "test".
+          start_discovery_thread unless BlueHydra.config["file"]
+        end
 
         # start the thread responsible for printing the CUI to screen unless
         # we are in daemon mode
