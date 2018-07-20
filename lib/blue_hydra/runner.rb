@@ -120,7 +120,7 @@ module BlueHydra
 
         # another thread which operates the actual device discovery, not needed
         # if reading from a file since btmon will just be getting replayed
-        unless ENV["BLUE_HYDRA"] == "test".
+        unless ENV["BLUE_HYDRA"] == "test"
           start_discovery_thread unless BlueHydra.config["file"]
         end
 
