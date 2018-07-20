@@ -2,7 +2,7 @@ require 'spec_helper'
 
 describe BlueHydra::Runner do
   it "takes a command" do
-    filepath = File.expand_path('./fixtures/btmon.stdout', __FILE__)
+    filepath = File.expand_path('../fixtures/btmon.stdout', __FILE__)
     command = "cat #{filepath} && sleep 1"
     runner = BlueHydra::Runner.new
     runner.start(command)
