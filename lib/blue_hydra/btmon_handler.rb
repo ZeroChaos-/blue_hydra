@@ -19,12 +19,20 @@ module BlueHydra
 
       # # log used btmon output for review if requested
       if BlueHydra.config["btmon_log"]
-        @log_file = File.open("btmon_#{Time.now.to_i}.log.gz",'w+')
+        @log_file = if Dir.exists? ('/var/log/blue_hydra')
+                        File.open("/var/log/blue_hydra/btmon_#{Time.now.to_i}.log.gz",'w+')
+                      else
+                        File.open("btmon_#{Time.now.to_i}.log.gz",'w+')
+                      end
         @log_writer = Zlib::GzipWriter.wrap(@log_file)
       end
       # # log raw btmon output for review if requested
       if BlueHydra.config["btmon_rawlog"]
-        @rawlog_file = File.open("btmon_raw_#{Time.now.to_i}.log.gz",'w+')
+        @rawlog_file = if Dir.exists?('/var/log/blue_hydra')
+                         File.open("/var/log/blue_hydra/btmon_raw_#{Time.now.to_i}.log.gz",'w+')
+                       else
+                         File.open("btmon_raw_#{Time.now.to_i}.log.gz",'w+')
+                       end
         @rawlog_writer = Zlib::GzipWriter.wrap(@rawlog_file)
       end
 
