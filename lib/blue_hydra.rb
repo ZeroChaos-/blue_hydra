@@ -156,8 +156,8 @@ module BlueHydra
   #
   # Logs will be written to /var/log/blue_hydra/blue_hydra_rssi.log, then /var/log/pwnix/blue_hydra_rssi.log and
   # in the local directory as blue_hydra_rssi.log if niether exist.
-  RSSI_LOGFILE = if Dir.exists?('/etc/blue_hydra')
-              File.expand_path('/etc/blue_hydra/blue_hydra_rssi.log', __FILE__)
+  RSSI_LOGFILE = if Dir.exists?('/var/log/blue_hydra')
+              File.expand_path('/var/log/blue_hydra/blue_hydra_rssi.log', __FILE__)
             elsif Dir.exists?('/var/log/pwnix')
               File.expand_path('/var/log/pwnix/blue_hydra_rssi.log', __FILE__)
             else
@@ -179,8 +179,8 @@ module BlueHydra
   #
   # Logs will be written to /var/log/pwnix/blue_hydra_chunk.log on a sensor or
   # in the local directory as blue_hydra_chunk.log if on a non-Pwnie system
-  CHUNK_LOGFILE = if Dir.exists?('/etc/blue_hydra')
-              File.expand_path('/etc/blue_hydra/blue_hydra_chunk.log', __FILE__)
+  CHUNK_LOGFILE = if Dir.exists?('/var/log/blue_hydra')
+              File.expand_path('/var/log/blue_hydra/blue_hydra_chunk.log', __FILE__)
             elsif Dir.exists?('/var/log/pwnix')
               File.expand_path('/var/log/pwnix/blue_hydra_chunk.log', __FILE__)
             else
