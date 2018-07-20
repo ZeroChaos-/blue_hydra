@@ -102,7 +102,7 @@ module BlueHydra
   # Logs will be written to /var/log/blue_hydra, then, /var/log/pwnix/blue_hydra.log and
   # in the local directory as blue_hydra.log if niether path exists
   LOGFILE = if Dir.exists?('/var/log/blue_hydra')
-              File.expand_path('/var/log/blue_hyrdra/blue_hydra.log', __FILE__)
+              File.expand_path('/var/log/blue_hydra/blue_hydra.log', __FILE__)
             elsif Dir.exists?('/var/log/pwnix')
               File.expand_path('/var/log/pwnix/blue_hydra.log', __FILE__)
             else
@@ -154,7 +154,7 @@ module BlueHydra
 
   # the RSSI log will only get used if the appropriate config value is set
   #
-  # Logs will be written to /var/log/blue_hyra/blue_hydra_rssi.log, then /var/log/pwnix/blue_hydra_rssi.log and
+  # Logs will be written to /var/log/blue_hydra/blue_hydra_rssi.log, then /var/log/pwnix/blue_hydra_rssi.log and
   # in the local directory as blue_hydra_rssi.log if niether exist.
   RSSI_LOGFILE = if Dir.exists?('/etc/blue_hydra')
               File.expand_path('/etc/blue_hydra/blue_hydra_rssi.log', __FILE__)
