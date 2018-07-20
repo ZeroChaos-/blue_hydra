@@ -61,11 +61,9 @@ bluetooth dongle.
 
 ## Configuring Options
 
-The config file is located in `/opt/pwnix/data/blue_hydra/blue_hydra.yml` on
-Pwnie devices. On systems which do no have the /opt/pwnix/data
-directory the service will default to looking in the root of the services
-directory (where this README file is located. It will still be called
-`blue_hydra.yml`
+The config file `blue_hydra.yml` is located in the install directory, unless /etc/blue_hydra exists,
+then it is in /etc/blue_hydra. The config file is located in `/opt/pwnix/data/blue_hydra/blue_hydra.yml` on
+Pwnie devices.
 
 The following options can be set:
 
@@ -101,8 +99,8 @@ Usage: BlueHydra [options]
 
 ## Logging
 
-All data is logged to an sqlite database (unless --no-db) is passed at the command line.  The database is located in the blue_hydra
-directory, unless /opt/pwnix/data exists (Pwnie Express sensors) and then it is placed in /opt/pwnix/data/blue_hydra.
+All data is logged to an sqlite database (unless --no-db) is passed at the command line.  The database `blue_hydra.db` is located in the blue_hydra
+directory, unless /etc/blue_hydra exists, and then it is placed in /etc/blue_hydra. On Pwnie Express sensors, it will be in /opt/pwnix/data.
 
 An example for a script wrapping blue_hydra and creating a csv output after run is available here:
 https://github.com/pwnieexpress/pwn_pad_sources/blob/develop/scripts/blue_hydra.sh

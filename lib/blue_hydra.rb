@@ -46,7 +46,9 @@ module BlueHydra
 
   # Config file located in /opt/pwnix/pwnix-config/blue_hydra.yml on sensors
   # or in the local directory if run on a non-Pwnie device.
-  CONFIG_FILE = if Dir.exists?('/opt/pwnix/data/blue_hydra')
+  CONFIG_FILE = if Dir.exists?('/etc/blue_hydra')
+              '/etc/blue_hydra/blue_hydra.yml'
+            elsif Dir.exists?('/opt/pwnix/data/blue_hydra')
               '/opt/pwnix/data/blue_hydra/blue_hydra.yml'
             else
               File.expand_path('../../blue_hydra.yml', __FILE__)
@@ -97,9 +99,11 @@ module BlueHydra
   # new config options and have them show up in the file after running
   File.write(CONFIG_FILE, @@config.to_yaml.gsub("---\n",''))
 
-  # Logs will be written to /var/log/pwnix/blue_hydra.log on a sensor or
-  # in the local directory as blue_hydra.log if on a non-Pwnie system
-  LOGFILE = if Dir.exists?('/var/log/pwnix')
+  # Logs will be written to /var/log/blue_hydra, then, /var/log/pwnix/blue_hydra.log and
+  # in the local directory as blue_hydra.log if niether path exists
+  LOGFILE = if Dir.exists?('/var/log/blue_hydra')
+              File.expand_path('/var/log/blue_hyrdra/blue_hydra.log', __FILE__)
+            elsif Dir.exists?('/var/log/pwnix')
               File.expand_path('/var/log/pwnix/blue_hydra.log', __FILE__)
             else
               File.expand_path('../../blue_hydra.log', __FILE__)
@@ -150,9 +154,11 @@ module BlueHydra
 
   # the RSSI log will only get used if the appropriate config value is set
   #
-  # Logs will be written to /var/log/pwnix/blue_hydra_rssi.log on a sensor or
-  # in the local directory as blue_hydra_rssi.log if on a non-Pwnie system
-  RSSI_LOGFILE = if Dir.exists?('/var/log/pwnix')
+  # Logs will be written to /var/log/blue_hyra/blue_hydra_rssi.log, then /var/log/pwnix/blue_hydra_rssi.log and
+  # in the local directory as blue_hydra_rssi.log if niether exist.
+  RSSI_LOGFILE = if Dir.exists?('/etc/blue_hydra')
+              File.expand_path('/etc/blue_hydra/blue_hydra_rssi.log', __FILE__)
+            elsif Dir.exists?('/var/log/pwnix')
               File.expand_path('/var/log/pwnix/blue_hydra_rssi.log', __FILE__)
             else
               File.expand_path('../../blue_hydra_rssi.log', __FILE__)
@@ -173,7 +179,9 @@ module BlueHydra
   #
   # Logs will be written to /var/log/pwnix/blue_hydra_chunk.log on a sensor or
   # in the local directory as blue_hydra_chunk.log if on a non-Pwnie system
-  CHUNK_LOGFILE = if Dir.exists?('/var/log/pwnix')
+  CHUNK_LOGFILE = Dir.exists?('/etc/blue_hydra')
+              File.expand_path('/etc/blue_hydra/blue_hydra_chunk.log', __FILE__)
+            elsif Dir.exists?('/var/log/pwnix')
               File.expand_path('/var/log/pwnix/blue_hydra_chunk.log', __FILE__)
             else
               File.expand_path('../../blue_hydra_chunk.log', __FILE__)
@@ -330,8 +338,10 @@ DataMapper::Property::String.length(255)
 
 LEGACY_DB_PATH   = '/opt/pwnix/blue_hydra.db'
 DATA_DIR         = '/opt/pwnix/data'
-DB_DIR           = File.join(DATA_DIR, 'blue_hydra')
+PWNIE_DB_DIR     = File.join(DATA_DIR, 'blue_hydra')
+DB_DIR           = '/etc/blue_hydra'
 DB_NAME          = 'blue_hydra.db'
+PWNIE_DB_PATH    = File.join(PWNIE_DB_DIR, DB_NAME)
 DB_PATH          = File.join(DB_DIR, DB_NAME)
 
 if Dir.exists?(DATA_DIR)
@@ -353,8 +363,10 @@ end
 # 'test' and all tests should run with an in-memory db.
 db_path = if ENV["BLUE_HYDRA"] == "test" || BlueHydra.no_db
             'sqlite::memory:?cache=shared'
-          elsif Dir.exist?(DB_DIR)
+          elsif Dir.exists?(DB_DIR)
             "sqlite:#{DB_PATH}"
+          elsif Dir.exists?(PWNIE_DB_DIR)
+            "sqlite:#{PWNIE_DB_PATH}"
           else
             "sqlite:#{DB_NAME}"
           end
@@ -365,7 +377,13 @@ DataMapper.setup(:default, db_path)
 def brains_to_floor
   # in the case of an invalid / blank/ corrupt DB file we will back up the old
   # file and then create a new db to proceed.
-  db_file = Dir.exist?('/opt/pwnix/data/blue_hydra/') ?  "/opt/pwnix/data/blue_hydra/blue_hydra.db" : "blue_hydra.db"
+  db_file = if Dir.exists?('/etc/blue_hydra/')
+              "/etc/blue_hydra/blue_hydra.db"
+            elsif Dir.exists?('/opt/pwnix/data/blue_hydra/')
+              "/opt/pwnix/data/blue_hydra/blue_hydra.db"
+            else
+              "blue_hydra.db"
+            end
   BlueHydra.logger.error("#{db_file} is not valid. Backing up to #{db_file}.corrupt and recreating...")
   BlueHydra::Pulse.send_event("blue_hydra", {
     key:       'blue_hydra_db_corrupt',
