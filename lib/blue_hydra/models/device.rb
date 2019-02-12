@@ -142,7 +142,7 @@ class BlueHydra::Device < BlueHydra::SQLModel
              ).first)
     if record.nil?
         record = BlueHydra::Device.create_new
-        BlueHydra.logger.info("-------no match new record")
+        BlueHydra.logger.debug("-------no match new record")
     end
     record.status = 'online'
     # set last_seen or default value if missing
@@ -187,7 +187,7 @@ class BlueHydra::Device < BlueHydra::SQLModel
 
   # mark hosts as 'offline' if we haven't seen for a while
   def self.mark_old_devices_offline(startup=false)
-    GC.start(immedaiate_sweep:true,full_mark:true)
+    GC.start(immediate_sweep:true,full_mark:true)
     if startup
       # efficiently kill old things with fire
       if BlueHydra::DB.query("select uuid from blue_hydra_devices where updated_at between \"1970-01-01\" AND \"#{Time.at(Time.now.to_i-1209600).to_s.split(" ")[0]}\" limit 5000;").count == 5000
@@ -206,7 +206,7 @@ class BlueHydra::Device < BlueHydra::SQLModel
         device.status = 'offline'
         device.save
       }
-      GC.start(immedaiate_sweep:true,full_mark:true)
+      GC.start(immediate_sweep:true,full_mark:true)
       # Kill old things with fire
       BlueHydra::Device.all(status:'online').each do |dev|
         next if dev.updated_at.nil? || dev.updated_at.empty?
@@ -218,7 +218,7 @@ class BlueHydra::Device < BlueHydra::SQLModel
           dev.destroy!
         end
       end
-      GC.start(immedaiate_sweep:true,full_mark:true)
+      GC.start(immediate_sweep:true,full_mark:true)
     end
     # classic mode devices have 15 min timeout
     BlueHydra::Device.all(classic_mode: true, status: "online").select{|x|
@@ -227,7 +227,7 @@ class BlueHydra::Device < BlueHydra::SQLModel
       device.status = 'offline'
       device.save
     }
-    GC.start(immedaiate_sweep:true,full_mark:true)
+    GC.start(immediate_sweep:true,full_mark:true)
     # le mode devices have 3 min timeout
     BlueHydra::Device.all(le_mode: true, status: "online").select{|x|
       x.last_seen < (Time.now.to_i - (60*3))
@@ -235,7 +235,7 @@ class BlueHydra::Device < BlueHydra::SQLModel
       device.status = 'offline'
       device.save
     }
-    GC.start(immedaiate_sweep:true,full_mark:true)
+    GC.start(immediate_sweep:true,full_mark:true)
   end
 
   ######################################

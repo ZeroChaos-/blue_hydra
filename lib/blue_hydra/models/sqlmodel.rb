@@ -152,7 +152,7 @@ class BlueHydra::SQLModel
       self.save_subset(self.dirty_attributes)
       return nil
      end
-     statement = "update #{self.table_name} set #{self.model_to_sql_conversion} where id = #{self.id} limit 1;"
+     statement = "update #{self.table_name} set #{self.model_to_sql_conversion} where id = #{self.id};"
      BlueHydra::DB.query(statement)
      statement = nil
      BlueHydra::DB.db.commit if BlueHydra::DB.db.transaction_active?
@@ -163,7 +163,7 @@ class BlueHydra::SQLModel
   def save_subset(cols)
      return false unless self.valid?
      updatestatement = model_to_sql_conversion(BlueHydra::DB.keys(self.table_name).select{|k,v| cols.include?(k)})
-     statement = "update #{self.table_name} set #{updatestatement} where id = #{self.id} limit 1;"
+     statement = "update #{self.table_name} set #{updatestatement} where id = #{self.id};"
      BlueHydra::DB.query(statement)
      statement = nil
      updatestatement = nil

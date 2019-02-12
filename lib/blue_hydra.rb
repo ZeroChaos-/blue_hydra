@@ -288,7 +288,7 @@ end
 
 
 LEGACY_DB_PATH   = '/opt/pwnix/blue_hydra.db'
-DATA_DIR         = '/opt/pwnix/data'
+DATA_DIR         = '/etc'
 DB_DIR           = File.join(DATA_DIR, 'blue_hydra')
 DB_NAME          = 'blue_hydra.db'
 DB_PATH          = File.join(DB_DIR, DB_NAME)

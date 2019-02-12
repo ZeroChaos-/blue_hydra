@@ -53,13 +53,18 @@ module BlueHydra::DB
   end
 
   def self.create_db
-    `touch /opt/pwnix/data/blue_hydra/blue_hydra.db`
-    `sqlite3 /opt/pwnix/data/blue_hydra/blue_hydra.db \"#{@sqlschema}\"`
+    return if BlueHydra.no_db
+    `touch /etc/blue_hydra/blue_hydra.db`
+    `sqlite3 /etc/blue_hydra/blue_hydra.db \"#{@sqlschema}\"`
   end
 
   def self.db
     unless @db
-      @db ||= SQLite3::Database.new(DATABASE_LOCATION)
+      if BlueHydra.no_db
+        @db ||= SQLite3::Database.new('sqlite::memory:?cache=shared')
+      else
+        @db ||= SQLite3::Database.new(DATABASE_LOCATION)
+      end
       @db.results_as_hash = true
     end
     return @db
