@@ -327,8 +327,6 @@ else
     # Upgrade the db..
      BlueHydra::DB.auto_migrate!
   rescue => e
-  require 'pry'
-  binding.pry
     # in the case of an invalid / blank/ corrupt DB file we will back up the old
     # file and then create a new db to proceed.
     db_file = Dir.exist?('/opt/pwnix/data/blue_hydra/') ?  "/opt/pwnix/data/blue_hydra/blue_hydra.db" : "blue_hydra.db"

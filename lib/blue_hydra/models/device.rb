@@ -178,8 +178,7 @@ class BlueHydra::Device < BlueHydra::SQLModel
         BlueHydra.logger.warn("Duplicate UAP/LAP detected: #{record.uap_lap}.")
       end
     else
-      require 'pry'
-      binding.pry
+      BlueHydra.logger.error("Record invalid, unable to save")
     end
 
     record

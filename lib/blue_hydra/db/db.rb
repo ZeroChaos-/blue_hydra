@@ -77,8 +77,6 @@ module BlueHydra::DB
         resultset = self.db.query(statement)
       rescue
         BlueHydra.logger.error(statement)
-        require 'pry'
-        binding.pry
         return []
       end
       result_array = []
