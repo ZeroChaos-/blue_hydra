@@ -53,15 +53,17 @@ module BlueHydra::DB
   end
 
   def self.create_db
-    return if BlueHydra.no_db
+    if ENV["BLUE_HYDRA"] == "test" || BlueHydra.no_db
+      return
+    end
     `touch /etc/blue_hydra/blue_hydra.db`
     `sqlite3 /etc/blue_hydra/blue_hydra.db \"#{@sqlschema}\"`
   end
 
   def self.db
     unless @db
-      if BlueHydra.no_db
-        @db ||= SQLite3::Database.new('sqlite::memory:?cache=shared')
+      if ENV["BLUE_HYDRA"] == "test" || BlueHydra.no_db
+        @db ||= SQLite3::Database.new(':memory:')
       else
         @db ||= SQLite3::Database.new(DATABASE_LOCATION)
       end

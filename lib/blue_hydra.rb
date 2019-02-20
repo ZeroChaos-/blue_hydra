@@ -37,14 +37,6 @@ module BlueHydra
 
   # Config file located in /opt/pwnix/pwnix-config/blue_hydra.yml on sensors
   # or in the local directory if run on a non-Pwnie device.
-  LEGACY_CONFIG_FILE = if Dir.exists?('/opt/pwnix/pwnix-config')
-              '/opt/pwnix/pwnix-config/blue_hydra.json'
-            else
-              File.expand_path('../../blue_hydra.json', __FILE__)
-            end
-
-  # Config file located in /opt/pwnix/pwnix-config/blue_hydra.yml on sensors
-  # or in the local directory if run on a non-Pwnie device.
   CONFIG_FILE = if Dir.exists?('/opt/pwnix/data/blue_hydra')
               '/opt/pwnix/data/blue_hydra/blue_hydra.yml'
             else
@@ -67,24 +59,13 @@ module BlueHydra
     "ui_inc_filter_mac"  => [],           # inclusive ui filter by mac
     "ui_inc_filter_prox" => [],           # inclusive ui filter by prox uuid / major /minor
     "signal_spitter"     => false         # make raw signal strength api available on localhost:1124
-  }
-
-  if File.exists?(LEGACY_CONFIG_FILE)
-    old_config = JSON.parse(
-      File.read(LEGACY_CONFIG_FILE)
-    )
-    File.unlink(LEGACY_CONFIG_FILE)
-  else
-    old_config = {}
-  end
-
-  config_base = DEFAULT_CONFIG.merge(old_config)
+  }.freeze
 
   # Create config file with defaults if missing or load and update.
   @@config = if File.exists?(CONFIG_FILE)
-               config_base.merge(YAML.load(File.read(CONFIG_FILE)))
+               DEFAULT_CONFIG.merge(YAML.load(File.read(CONFIG_FILE)))
              else
-               config_base
+               DEFAULT_CONFIG
              end
 
   # update the config file with any new values not present, will leave
@@ -287,7 +268,6 @@ rescue
 end
 
 
-LEGACY_DB_PATH   = '/opt/pwnix/blue_hydra.db'
 DATA_DIR         = '/etc'
 DB_DIR           = File.join(DATA_DIR, 'blue_hydra')
 DB_NAME          = 'blue_hydra.db'
@@ -299,11 +279,6 @@ if Dir.exists?(DATA_DIR)
   end
 end
 
-if File.exists?(LEGACY_DB_PATH) && Dir.exists?(DB_DIR)
-  FileUtils.mv(LEGACY_DB_PATH, DB_PATH) unless File.exists?(DB_PATH)
-end
-
-
 # The database will be stored in /opt/pwnix/blue_hydra.db if we are on a system
 # which the Pwnie Express chef scripts have been run. Otherwise it will attempt
 # to create a sqlite db whereever the run was initiated.
@@ -312,7 +287,7 @@ end
 # 'test' and all tests should run with an in-memory db.
 DATABASE_LOCATION = if ENV["BLUE_HYDRA"] == "test" || BlueHydra.no_db
 #TODO test
-            'sqlite::memory:?cache=shared'
+            ':memory:'
           elsif Dir.exist?(DB_DIR)
             "#{DB_PATH}"
           else
@@ -327,6 +302,13 @@ else
     # Upgrade the db..
      BlueHydra::DB.auto_migrate!
   rescue => e
+    # the in memory db cannot be corrupt at this point unless we broke something, so just error and be sad
+    if ENV["BLUE_HYDRA"] == "test" || BlueHydra.no_db
+      BlueHydra.logger.fatal("In memory db is corrupt, aborting with brains on floor")
+      require 'pry'
+      binding.pry
+      exit 1
+    end
     # in the case of an invalid / blank/ corrupt DB file we will back up the old
     # file and then create a new db to proceed.
     db_file = Dir.exist?('/opt/pwnix/data/blue_hydra/') ?  "/opt/pwnix/data/blue_hydra/blue_hydra.db" : "blue_hydra.db"
@@ -349,6 +331,5 @@ BlueHydra::DB.query("PRAGMA journal_mode = MEMORY")
 if BlueHydra::SyncVersion.count == 0
   BlueHydra::SyncVersion.create_new.save
 end
-
 
 BlueHydra::SYNC_VERSION = BlueHydra::SyncVersion.first.version
