@@ -30,7 +30,7 @@ module BlueHydra
 
           # if we just got a new message shovel the working set into the
           # outgoing queue and reset it
-          address_count = working_set.join("").scan(/^\s*.*ddress: ((?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})/).flatten.uniq.count
+          address_count = working_set.flatten.reject{|x| x =~ /Direct address/}.join("").scan(/^\s*.*ddress: ((?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})/).flatten.uniq.count
           if address_count == 1
             @outgoing_q.push working_set
           elsif address_count < 1
@@ -100,7 +100,7 @@ module BlueHydra
       # lines
       elsif chunk[0] =~ / \(0x3e\)/ && # LE Meta Event
         # Numbers from bluez monitor/packet.h static const struct subevent_data le_meta_event_table
-            chunk[1] =~ / \(0x0[12]\)/ # LE Connection Complete / LE Advertising Report
+            chunk[1] =~ / \(0x0[12d]\)/ # LE Connection Complete / LE Advertising Report / LE Extended Advertising Report
         true
 
       # otherwise this will get grouped with the current working set in the
