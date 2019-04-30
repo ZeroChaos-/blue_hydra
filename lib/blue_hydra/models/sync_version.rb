@@ -33,5 +33,3 @@ class BlueHydra::SyncVersion < BlueHydra::SQLModel
 
 
 end
-
-
