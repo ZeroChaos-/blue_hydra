@@ -42,7 +42,7 @@ class BlueHydra::Device
   property :le_service_uuids,              Text
   property :le_address_type,               String
   property :le_random_address_type,        String
-  property :le_company_data,               String
+  property :le_company_data,               String, :length => 255
   property :le_company_uuid,               String
   property :le_proximity_uuid,             String
   property :le_major_num,                  String

@@ -88,7 +88,7 @@ module BlueHydra
         "07", # Remote Name Req Complete
         "3d", # Remote Host Supported Features
         "04", # Connect Request
-        "0e"  # Command Complete
+        "0e", # Command Complete
       ]
 
       # if the first line of the message chunk matches one of these patterns
@@ -101,6 +101,10 @@ module BlueHydra
       elsif chunk[0] =~ / \(0x3e\)/ && # LE Meta Event
         # Numbers from bluez monitor/packet.h static const struct subevent_data le_meta_event_table
             chunk[1] =~ / \(0x0[12d]\)/ # LE Connection Complete / LE Advertising Report / LE Extended Advertising Report
+        true
+
+      #name has been moved into MGMT Event, not sure what else, at least it has an address
+      elsif chunk[0] =~/@ MGMT Event: .* \(0x0012\)/ # @ MGMT Event: Device Fo.. (0x0012)
         true
 
       # otherwise this will get grouped with the current working set in the
