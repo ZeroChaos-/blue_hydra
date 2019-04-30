@@ -187,7 +187,8 @@ module BlueHydra
                  set_attr(:company_type, company_type)
                when line =~ /^UUID:/
                  if company_type && company_type =~ /\(2\)/ && company_type_last_set && company_type_last_set == timestamp.split(': ')[1].to_f
-                   set_attr("#{bt_mode}_proximity_uuid".to_sym, line.split(': ')[1])
+                   flipped_prox_uuid = line.split(': ')[1].gsub('-','').scan(/.{2}/).reverse.join.scan(/(.{8})(.{4})(.{4})(.*)/).join('-')
+                   set_attr("#{bt_mode}_proximity_uuid".to_sym, flipped_prox_uuid)
                  else
                    set_attr("#{bt_mode}_company_uuid".to_sym, line.split(': ')[1])
                  end
