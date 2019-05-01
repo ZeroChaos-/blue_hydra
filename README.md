@@ -79,6 +79,9 @@ The following options can be set:
 * `ui_inc_filter_mode`: `:disabled|:hilight|:exclusive`, set ui filtering to this mode by default
 * `ui_inc_filter_mac`: `- FF:FF:00:00:59:25`, set inclusive filter on this mac, each goes on a newline proceeded by hiphon and space
 * `ui_inc_filter_prox`: `- 669a0c20-0008-9191-e411-1b11d05d7707-9001-3364`, set inclusive filter on this proximity_uuid-major_number-minor_number, each goes on a newline proceeded by hiphon and space
+* `ui_exc_filter_mac`: same syntax as ui_inc_filter_mac, but exclude instead
+* `ui_exc_filter_prox`: same syntax as ui_inc_filter_prox, but exclude instead
+* `ignore_mac`: same syntax as ui_inc_filter mac, but entirely ignore device, both db and ui
 
 ## Usage
 
