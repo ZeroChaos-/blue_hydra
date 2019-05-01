@@ -519,7 +519,7 @@ class BlueHydra::Device
     self[:classic_rssi] = JSON.generate(new)
   end
 
-  # set the :le_rss attribute by merging with previously seen values
+  # set the :le_rssi attribute by merging with previously seen values
   #
   # limit to last 100 rssis
   #
