@@ -82,12 +82,16 @@ Press "r" to reverse the sort order
 Press "c" to change the column set
 Press "q" to exit
 
-press [Enter] key to continue....
 HELP
 
-puts msg
+      if !BlueHydra.config["ignore_mac"].empty?
+        msg << "Currently ignoring #{BlueHydra.config["ignore_mac"]}\n\n"
+      end
+      msg << "press [Enter] key to continue...."
 
-$stdin.gets.chomp
+      puts msg
+
+      $stdin.gets.chomp
     end
 
     # the main work loop which prints the actual data to screen

@@ -30,9 +30,12 @@ module BlueHydra
 
           # if we just got a new message shovel the working set into the
           # outgoing queue and reset it
-          address_count = working_set.flatten.reject{|x| x =~ /Direct address/}.join("").scan(/^\s*.*ddress: ((?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})/).flatten.uniq.count
+          address_list = working_set.flatten.reject{|x| x =~ /Direct address/}.join("").scan(/^\s*.*ddress: ((?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})/).flatten.uniq
+          address_count = address_list.count
           if address_count == 1
-            @outgoing_q.push working_set
+            unless BlueHydra.config["ignore_mac"].include?(address_list[0])
+              @outgoing_q.push working_set
+            end
           elsif address_count < 1
             if BlueHydra.config["chunker_debug"]
               working_set.flatten.each{|msg| BlueHydra.chunk_logger.info(msg.chomp) }
