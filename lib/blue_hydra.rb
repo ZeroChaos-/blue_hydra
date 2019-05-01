@@ -68,9 +68,11 @@ module BlueHydra
     "file"               => false,        # if set will read from file, not hci dev
     "rssi_log"           => false,        # if set will log rssi
     "aggressive_rssi"    => false,        # if set will sync all rssi to pulse
-    "ui_filter_mode"     => :disabled,    # default ui filter mode to start in
+    "ui_inc_filter_mode" => :disabled,    # default ui filter mode to start in
     "ui_inc_filter_mac"  => [],           # inclusive ui filter by mac
     "ui_inc_filter_prox" => [],           # inclusive ui filter by prox uuid / major /minor
+    "ui_exc_filter_mac"  => [],           # exclude ui filter by mac
+    "ui_exc_filter_prox" => [],           # exclude ui filter by prox uuid / major /minor
     "ignore_mac"         => [],           # completely ignore a mac address, both ui and db
     "signal_spitter"     => false,        # make raw signal strength api available on localhost:1124
     "chunker_debug"      => false
@@ -92,11 +94,17 @@ module BlueHydra
                new_config = YAML.load(File.read(CONFIG_FILE))
                new_config["ui_inc_filter_mac"].map{|mac|mac.upcase!} if new_config["ui_inc_filter_mac"]
                new_config["ui_inc_filter_prox"].map{|prox|prox.downcase!} if new_config["ui_inc_filter_prox"]
+               new_config["ui_exc_filter_mac"].map{|emac|emac.upcase!} if new_config["ui_exc_filter_mac"]
+               new_config["ui_exc_filter_prox"].map{|eprox|eprox.downcase!} if new_config["ui_exc_filter_prox"]
                new_config["ignore_mac"].map{|imac|imac.upcase!} if new_config["ignore_mac"]
+               (new_config["ui_inc_filter_mode"] = new_config["ui_filter_mode"]) if new_config["ui_filter_mode"]
                config_base.merge(new_config)
              else
                config_base
              end
+
+  #remove keys we migrated away from
+  @@config.keep_if{|k,_| DEFAULT_CONFIG.include?(k)}
 
   # update the config file with any new values not present, will leave
   # configured values intact but should allow users to pull code changes with

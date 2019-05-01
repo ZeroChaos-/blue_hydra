@@ -87,6 +87,12 @@ HELP
       if !BlueHydra.config["ignore_mac"].empty?
         msg << "Currently ignoring #{BlueHydra.config["ignore_mac"]}\n\n"
       end
+      if !BlueHydra.config["ui_exc_filter_mac"].empty?
+        msg << "Currently ui excluding #{BlueHydra.config["ui_exc_filter_mac"]}\n\n"
+      end
+      if !BlueHydra.config["ui_exc_filter_prox"].empty?
+        msg << "Currently ui excluding #{BlueHydra.config["ui_exc_filter_prox"]}\n\n"
+      end
       msg << "press [Enter] key to continue...."
 
       puts msg
@@ -99,7 +105,7 @@ HELP
       reset         = false # determine if we need to reset the loop by restarting method
       paused        = false
       sort        ||= :_seen # default sort attribute
-      filter_mode   = BlueHydra.config["ui_filter_mode"]
+      filter_mode   = BlueHydra.config["ui_inc_filter_mode"]
       order       ||= "ascending" #default sort order
 
       # set default printable keys, aka column headers
@@ -461,7 +467,15 @@ HELP
           # iterate across the  sorted data
           d.each do |data|
 
-            #here we handle filter/hilight control
+            #here we handle exclude filters
+            if BlueHydra.config["ui_exc_filter_mac"].include?(data[:address])
+              next
+            end
+            if BlueHydra.config["ui_exc_filter_prox"].include?("#{data[:le_proximity_uuid]}-#{data[:le_major_num]}-#{data[:le_minor_num]}")
+              next
+            end
+
+            #here we handle inc filter/hilight control
             hilight = "0"
             unless filter_mode == :disabled
               skip_data = true
