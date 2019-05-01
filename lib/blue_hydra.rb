@@ -92,12 +92,18 @@ module BlueHydra
   # Create config file with defaults if missing or load and update.
   @@config = if File.exists?(CONFIG_FILE)
                new_config = YAML.load(File.read(CONFIG_FILE))
+               #error checking
+               # throw something in here to detect non-nil but bad values. such as using .is_a?(Array) for things
+               # which we expect to be an array
+               #conversions
                new_config["ui_inc_filter_mac"].map{|mac|mac.upcase!} if new_config["ui_inc_filter_mac"]
                new_config["ui_inc_filter_prox"].map{|prox|prox.downcase!} if new_config["ui_inc_filter_prox"]
                new_config["ui_exc_filter_mac"].map{|emac|emac.upcase!} if new_config["ui_exc_filter_mac"]
                new_config["ui_exc_filter_prox"].map{|eprox|eprox.downcase!} if new_config["ui_exc_filter_prox"]
                new_config["ignore_mac"].map{|imac|imac.upcase!} if new_config["ignore_mac"]
+               #migration
                (new_config["ui_inc_filter_mode"] = new_config["ui_filter_mode"]) if new_config["ui_filter_mode"]
+               new_config.reject!{|k,v| v == nil}
                config_base.merge(new_config)
              else
                config_base
