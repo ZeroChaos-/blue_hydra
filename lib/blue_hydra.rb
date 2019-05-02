@@ -95,6 +95,15 @@ module BlueHydra
                #error checking
                # throw something in here to detect non-nil but bad values. such as using .is_a?(Array) for things
                # which we expect to be an array
+
+               if new_config["info_scan_rate"]
+                 # handle people putting in negative number by changing them to positive ones
+                 new_config["info_scan_rate"] = new_config["info_scan_rate"].abs
+                 # handle set non-sense low values to a sane minimum
+                 if ( new_config["info_scan_rate"] < 45 && new_config["info_scan_rate"] != 0 )
+                   new_config["info_scan_rate"] = 45
+                 end
+               end
                #conversions
                new_config["ui_inc_filter_mac"].map{|mac|mac.upcase!} if new_config["ui_inc_filter_mac"]
                new_config["ui_inc_filter_prox"].map{|prox|prox.downcase!} if new_config["ui_inc_filter_prox"]

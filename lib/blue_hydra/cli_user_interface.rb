@@ -33,7 +33,7 @@ module BlueHydra
     end
 
     def info_scan_queue
-      if BlueHydra.info_scan
+      if BlueHydra.info_scan && BlueHydra.config["info_scan_rate"].to_i != 0
         return @runner.info_scan_queue.length
       else
         return "disabled"

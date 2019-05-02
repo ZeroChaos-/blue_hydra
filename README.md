@@ -69,7 +69,7 @@ The following options can be set:
 
 * `log_level`: defaults to info level, can be set to debug for much more verbosity. If set to `false` no log or rssi log will be created.
 * `bt_device`: specify device to use as main bluetooth interface, defaults to `hci0`
-* `info_scan_rate`: rate at which to run info scan in seconds, defaults to 60
+* `info_scan_rate`: rate at which to run info scan in seconds, defaults to 240.  Values too small will be set to 45.  Value of 0 disables info scanning.
 * `status_sync_rate`: rate at which to sync device status to Pulse in seconds
 * `btmon_log`: `true|false`, if set to true will log filtered btmon output
 * `btmon_rawlog`: `true|false`, if set to true will log unfiltered btmon output
