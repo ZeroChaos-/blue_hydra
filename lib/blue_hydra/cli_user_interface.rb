@@ -301,7 +301,7 @@ HELP
 
           # check status of ubertooth
           if scanner_status[:ubertooth]
-            if scanner_status[:ubertooth].class == Fixnum
+            if scanner_status[:ubertooth].class == Integer
               ubertooth_time = Time.now.to_i - scanner_status[:ubertooth]
             else
               ubertooth_time = scanner_status[:ubertooth]
