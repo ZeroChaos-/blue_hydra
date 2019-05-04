@@ -33,7 +33,11 @@ module BlueHydra
     end
 
     def info_scan_queue
-      @runner.info_scan_queue
+      if BlueHydra.info_scan && BlueHydra.config["info_scan_rate"].to_i != 0
+        return @runner.info_scan_queue.length
+      else
+        return "disabled"
+      end
     end
 
     def l2ping_queue
@@ -70,27 +74,38 @@ The "VERS" column in the following table shows mode and version if available.
 
 The "RANGE" column shows distance in meters from the device if known.
 
-Press "f" to change filter mode to the next setting (then enter)
-Press "F" to change filter mode to the previous setting (then enter)
-Press "s" to change sort to the next column to the right (then enter)
-Press "S" to change sort to the next column to the left (then enter)
-Press "r" to reverse the sort order (then enter)
-Press "c" to change the column set (then enter)
-Press "q" to exit (then enter)
+Press "f" to change filter mode to the next setting
+Press "F" to change filter mode to the previous setting
+Press "s" to change sort to the next column to the right
+Press "S" to change sort to the next column to the left
+Press "r" to reverse the sort order
+Press "c" to change the column set
+Press "q" to exit
 
-press [Enter] key to continue....
 HELP
 
-puts msg
+      if !BlueHydra.config["ignore_mac"].empty?
+        msg << "Currently ignoring #{BlueHydra.config["ignore_mac"]}\n\n"
+      end
+      if !BlueHydra.config["ui_exc_filter_mac"].empty?
+        msg << "Currently ui excluding #{BlueHydra.config["ui_exc_filter_mac"]}\n\n"
+      end
+      if !BlueHydra.config["ui_exc_filter_prox"].empty?
+        msg << "Currently ui excluding #{BlueHydra.config["ui_exc_filter_prox"]}\n\n"
+      end
+      msg << "press [Enter] key to continue...."
 
-$stdin.gets.chomp
+      puts msg
+
+      $stdin.gets.chomp
     end
 
     # the main work loop which prints the actual data to screen
     def cui_loop
       reset         = false # determine if we need to reset the loop by restarting method
+      paused        = false
       sort        ||= :_seen # default sort attribute
-      filter_mode   = BlueHydra.config["ui_filter_mode"]
+      filter_mode   = BlueHydra.config["ui_inc_filter_mode"]
       order       ||= "ascending" #default sort order
 
       # set default printable keys, aka column headers
@@ -141,10 +156,22 @@ $stdin.gets.chomp
         end
 
         # read 1 character from standard in
-        input = STDIN.read_nonblock(1) rescue nil
+        begin
+          system('stty raw -echo')
+          input = STDIN.read_nonblock(1) rescue nil
+        ensure
+          system('stty -raw echo')
+        end
 
         # handle the input character
         case
+        when " " == input
+          if paused
+            paused = false
+          else
+            paused = true
+            puts "*** paused ***"
+          end
         when ["q","Q"].include?(input) # bail out yo
           exit
         when input == "f" # change filter mode forward
@@ -230,7 +257,9 @@ $stdin.gets.chomp
 
         # render the cui with and get back list of currently sortable keys for
         # next iteration of loop
-        sortable_keys = render_cui(max_height,sort,order,printable_keys,filter_mode)
+        unless paused
+          sortable_keys = render_cui(max_height,sort,order,printable_keys,filter_mode)
+        end
         if sortable_keys.nil? || !sortable_keys.include?(sort)
           # if we have remove the column we were sorting on
           # reset the sort order to the default
@@ -272,7 +301,7 @@ $stdin.gets.chomp
 
           # check status of ubertooth
           if scanner_status[:ubertooth]
-            if scanner_status[:ubertooth].class == Fixnum
+            if scanner_status[:ubertooth].class == Integer
               ubertooth_time = Time.now.to_i - scanner_status[:ubertooth]
             else
               ubertooth_time = scanner_status[:ubertooth]
@@ -307,7 +336,7 @@ $stdin.gets.chomp
         # second line, information about runner queues to help determine if we
         # have a backlog. backlogs mean that the data being displayed may be
         # delayed
-        pbuff << "Queue status: result_queue: #{result_queue.length}, info_scan_queue: #{info_scan_queue.length}, l2ping_queue: #{l2ping_queue.length}\n"
+        pbuff << "Queue status: result_queue: #{result_queue.length}, info_scan_queue: #{info_scan_queue}, l2ping_queue: #{l2ping_queue.length}\n"
         lines += 1
 
         # unless we are reading from a file we add a line with information
@@ -438,7 +467,15 @@ $stdin.gets.chomp
           # iterate across the  sorted data
           d.each do |data|
 
-            #here we handle filter/hilight control
+            #here we handle exclude filters
+            if BlueHydra.config["ui_exc_filter_mac"].include?(data[:address])
+              next
+            end
+            if BlueHydra.config["ui_exc_filter_prox"].include?("#{data[:le_proximity_uuid]}-#{data[:le_major_num]}-#{data[:le_minor_num]}")
+              next
+            end
+
+            #here we handle inc filter/hilight control
             hilight = "0"
             unless filter_mode == :disabled
               skip_data = true

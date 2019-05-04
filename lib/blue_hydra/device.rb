@@ -42,7 +42,7 @@ class BlueHydra::Device
   property :le_service_uuids,              Text
   property :le_address_type,               String
   property :le_random_address_type,        String
-  property :le_company_data,               String
+  property :le_company_data,               String, :length => 255
   property :le_company_uuid,               String
   property :le_proximity_uuid,             String
   property :le_major_num,                  String
@@ -176,7 +176,7 @@ class BlueHydra::Device
     %w{
       address name manufacturer short_name lmp_version firmware
       classic_major_class classic_minor_class le_tx_power classic_tx_power
-      le_address_type company company_type appearance le_address_type
+      le_address_type company appearance
       le_random_address_type le_company_uuid le_company_data le_proximity_uuid
       le_major_num le_minor_num classic_mode le_mode
     }.map(&:to_sym).each do |attr|
@@ -188,7 +188,17 @@ class BlueHydra::Device
             "#{address} multiple values detected for #{attr}: #{result[attr].inspect}. Using first value..."
           )
         end
-        record.send("#{attr.to_s}=", result.delete(attr).uniq.first)
+        record.send("#{attr.to_s}=", result.delete(attr).uniq.sort.first)
+      end
+    end
+
+    # this is probably a band-aie, likely devices have multiple company type elements
+    #update flappy company_type
+    if result[:company_type]
+      data = result.delete(:company_type).uniq.sort.first
+      if data =~ /Unknown/
+        data = "Unknown"
+        record.send("#{:company_type}=", data)
       end
     end
 
@@ -509,7 +519,7 @@ class BlueHydra::Device
     self[:classic_rssi] = JSON.generate(new)
   end
 
-  # set the :le_rss attribute by merging with previously seen values
+  # set the :le_rssi attribute by merging with previously seen values
   #
   # limit to last 100 rssis
   #
@@ -537,7 +547,7 @@ class BlueHydra::Device
     type = type.split(' ')[0]
     if type =~ /Public/
       self[:le_address_type] = type
-      self[:le_random_address_type] = nil if le_address_type
+      self[:le_random_address_type] = nil if self.le_address_type
     elsif type =~ /Random/
       self[:le_address_type] = type
     end

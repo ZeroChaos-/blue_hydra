@@ -120,7 +120,9 @@ module BlueHydra
 
         # another thread which operates the actual device discovery, not needed
         # if reading from a file since btmon will just be getting replayed
-        start_discovery_thread unless BlueHydra.config["file"]
+        unless ENV["BLUE_HYDRA"] == "test"
+          start_discovery_thread unless BlueHydra.config["file"]
+        end
 
         # start the thread responsible for printing the CUI to screen unless
         # we are in daemon mode
@@ -330,7 +332,14 @@ module BlueHydra
       self.discovery_thread = Thread.new do
         begin
 
-          discovery_command = "#{File.expand_path('../../../bin/test-discovery', __FILE__)} -i #{BlueHydra.config["bt_device"]}"
+          if BlueHydra.info_scan
+            discovery_time    = 30
+            discovery_timeout = 45
+          else
+            discovery_time    = 180
+            discovery_timeout = 195
+          end
+          discovery_command = "#{File.expand_path('../../../bin/test-discovery', __FILE__)} --timeout #{discovery_time} -i #{BlueHydra.config["bt_device"]}"
 
           loop do
             begin
@@ -439,7 +448,7 @@ module BlueHydra
               # run test-discovery
               # do a discovery
               self.scanner_status[:test_discovery] = Time.now.to_i unless BlueHydra.daemon_mode
-              discovery_errors = BlueHydra::Command.execute3(discovery_command,45)[:stderr]
+              discovery_errors = BlueHydra::Command.execute3(discovery_command,discovery_timeout)[:stderr]
               if discovery_errors
                 if discovery_errors =~ /org.bluez.Error.NotReady/
                   raise BluezNotReadyError
@@ -472,12 +481,25 @@ module BlueHydra
               bluetoothd_errors += 1
               begin
               if bluetoothd_errors == 1
+                if ::File.executable?(`which service 2> /dev/null`.chomp)
+                  service = "service"
+                elsif ::File.executable?(`which rc-service 2> /dev/null`.chomp)
+                  service = "rc-service"
+                else
+                  service = false
+                end
+
                 # Is bluetoothd running?
                 bluetoothd_pid = `pgrep bluetoothd`.chomp
                 unless bluetoothd_pid == ""
                   # Does init own bluetoothd?
                   if `ps -o ppid= #{bluetoothd_pid}`.chomp =~ /\s1/
-                    bluetoothd_restart = BlueHydra::Command.execute3("service bluetooth restart")
+                    if service
+                      bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
+                    else
+                      bluetoothd_restart ||= {}
+                      bluetoothd_restart[:exit_code] == 127
+                    end
                     sleep 3
                   else
                     # not controled by init, bail
@@ -496,7 +518,12 @@ module BlueHydra
                   end
                 else
                   # bluetoothd isn't running at all, attempt to restart through init
-                  bluetoothd_restart = BlueHydra::Command.execute3("service bluetooth restart")
+                  if service
+                    bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
+                  else
+                    bluetoothd_restart ||= {}
+                    bluetoothd_restart[:exit_code] == 127
+                  end
                   sleep 3
                 end
                 unless bluetoothd_restart[:exit_code] == 0
@@ -517,6 +544,7 @@ module BlueHydra
                 unless BlueHydra.daemon_mode
                   self.cui_thread.kill if self.cui_thread
                   puts "Bluetoothd is not functioning as expected and auto-restart failed."
+                  puts 'Unable to control system services, "service" and "rc-service" are both missing?' unless service
                   puts "Please restart bluetoothd and try again."
                 end
                 if bluetoothd_restart[:stderr]
@@ -683,9 +711,11 @@ module BlueHydra
       # only scan if the info scan rate timeframe has elapsed
       self.query_history[track_addr] ||= {}
       last_info = self.query_history[track_addr][mode].to_i
-      if (Time.now.to_i - (BlueHydra.config["info_scan_rate"].to_i * 60)) >= last_info
-        info_scan_queue.push({command: command, address: address})
-        self.query_history[track_addr][mode] = Time.now.to_i
+      if BlueHydra.info_scan && (BlueHydra.config["info_scan_rate"].to_i > 0)
+        if (Time.now.to_i - (BlueHydra.config["info_scan_rate"].to_i * 60)) >= last_info
+          info_scan_queue.push({command: command, address: address})
+          self.query_history[track_addr][mode] = Time.now.to_i
+        end
       end
     end
 

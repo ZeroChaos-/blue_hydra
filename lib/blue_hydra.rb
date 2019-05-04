@@ -46,7 +46,11 @@ module BlueHydra
 
   # Config file located in /opt/pwnix/pwnix-config/blue_hydra.yml on sensors
   # or in the local directory if run on a non-Pwnie device.
-  CONFIG_FILE = if Dir.exists?('/opt/pwnix/data/blue_hydra')
+  CONFIG_FILE = if ENV["BLUE_HYDRA"] == "test"
+              File.expand_path('../../blue_hydra.yml', __FILE__)
+            elsif Dir.exists?('/etc/blue_hydra')
+              '/etc/blue_hydra/blue_hydra.yml'
+            elsif Dir.exists?('/opt/pwnix/data/blue_hydra')
               '/opt/pwnix/data/blue_hydra/blue_hydra.yml'
             else
               File.expand_path('../../blue_hydra.yml', __FILE__)
@@ -58,15 +62,18 @@ module BlueHydra
   DEFAULT_CONFIG = {
     "log_level"          => "info",
     "bt_device"          => "hci0",       # change for external ud100
-    "info_scan_rate"     => 60,           # 1 minute in seconds
+    "info_scan_rate"     => 240,          # 4 minutes in seconds
     "btmon_log"          => false,        # if set will write used btmon output to a log file
     "btmon_rawlog"       => false,        # if set will write raw btmon output to a log file
     "file"               => false,        # if set will read from file, not hci dev
     "rssi_log"           => false,        # if set will log rssi
     "aggressive_rssi"    => false,        # if set will sync all rssi to pulse
-    "ui_filter_mode"     => :disabled,    # default ui filter mode to start in
+    "ui_inc_filter_mode" => :disabled,    # default ui filter mode to start in
     "ui_inc_filter_mac"  => [],           # inclusive ui filter by mac
     "ui_inc_filter_prox" => [],           # inclusive ui filter by prox uuid / major /minor
+    "ui_exc_filter_mac"  => [],           # exclude ui filter by mac
+    "ui_exc_filter_prox" => [],           # exclude ui filter by prox uuid / major /minor
+    "ignore_mac"         => [],           # completely ignore a mac address, both ui and db
     "signal_spitter"     => false,        # make raw signal strength api available on localhost:1124
     "chunker_debug"      => false
   }
@@ -84,19 +91,48 @@ module BlueHydra
 
   # Create config file with defaults if missing or load and update.
   @@config = if File.exists?(CONFIG_FILE)
-               config_base.merge(YAML.load(File.read(CONFIG_FILE)))
+               new_config = YAML.load(File.read(CONFIG_FILE))
+               #error checking
+               # throw something in here to detect non-nil but bad values. such as using .is_a?(Array) for things
+               # which we expect to be an array
+
+               if new_config["info_scan_rate"]
+                 # handle people putting in negative number by changing them to positive ones
+                 new_config["info_scan_rate"] = new_config["info_scan_rate"].abs
+                 # handle set non-sense low values to a sane minimum
+                 if ( new_config["info_scan_rate"] < 45 && new_config["info_scan_rate"] != 0 )
+                   new_config["info_scan_rate"] = 45
+                 end
+               end
+               #conversions
+               new_config["ui_inc_filter_mac"].map{|mac|mac.upcase!} if new_config["ui_inc_filter_mac"]
+               new_config["ui_inc_filter_prox"].map{|prox|prox.downcase!} if new_config["ui_inc_filter_prox"]
+               new_config["ui_exc_filter_mac"].map{|emac|emac.upcase!} if new_config["ui_exc_filter_mac"]
+               new_config["ui_exc_filter_prox"].map{|eprox|eprox.downcase!} if new_config["ui_exc_filter_prox"]
+               new_config["ignore_mac"].map{|imac|imac.upcase!} if new_config["ignore_mac"]
+               #migration
+               (new_config["ui_inc_filter_mode"] = new_config["ui_filter_mode"]) if new_config["ui_filter_mode"]
+               new_config.reject!{|k,v| v == nil}
+               config_base.merge(new_config)
              else
                config_base
              end
+
+  #remove keys we migrated away from
+  @@config.keep_if{|k,_| DEFAULT_CONFIG.include?(k)}
 
   # update the config file with any new values not present, will leave
   # configured values intact but should allow users to pull code changes with
   # new config options and have them show up in the file after running
   File.write(CONFIG_FILE, @@config.to_yaml.gsub("---\n",''))
 
-  # Logs will be written to /var/log/pwnix/blue_hydra.log on a sensor or
-  # in the local directory as blue_hydra.log if on a non-Pwnie system
-  LOGFILE = if Dir.exists?('/var/log/pwnix')
+  # Logs will be written to /var/log/blue_hydra, then, /var/log/pwnix/blue_hydra.log and
+  # in the local directory as blue_hydra.log if niether path exists
+  LOGFILE = if ENV["BLUE_HYDRA"] == "test"
+              File.expand_path('../../blue_hydra.log', __FILE__)
+            elsif Dir.exists?('/var/log/blue_hydra')
+              File.expand_path('/var/log/blue_hydra/blue_hydra.log', __FILE__)
+            elsif Dir.exists?('/var/log/pwnix')
               File.expand_path('/var/log/pwnix/blue_hydra.log', __FILE__)
             else
               File.expand_path('../../blue_hydra.log', __FILE__)
@@ -147,9 +183,13 @@ module BlueHydra
 
   # the RSSI log will only get used if the appropriate config value is set
   #
-  # Logs will be written to /var/log/pwnix/blue_hydra_rssi.log on a sensor or
-  # in the local directory as blue_hydra_rssi.log if on a non-Pwnie system
-  RSSI_LOGFILE = if Dir.exists?('/var/log/pwnix')
+  # Logs will be written to /var/log/blue_hydra/blue_hydra_rssi.log, then /var/log/pwnix/blue_hydra_rssi.log and
+  # in the local directory as blue_hydra_rssi.log if niether exist.
+  RSSI_LOGFILE = if ENV["BLUE_HYDRA"] == "test"
+              File.expand_path('../../blue_hydra_rssi.log', __FILE__)
+            elsif Dir.exists?('/var/log/blue_hydra')
+              File.expand_path('/var/log/blue_hydra/blue_hydra_rssi.log', __FILE__)
+            elsif Dir.exists?('/var/log/pwnix')
               File.expand_path('/var/log/pwnix/blue_hydra_rssi.log', __FILE__)
             else
               File.expand_path('../../blue_hydra_rssi.log', __FILE__)
@@ -170,7 +210,11 @@ module BlueHydra
   #
   # Logs will be written to /var/log/pwnix/blue_hydra_chunk.log on a sensor or
   # in the local directory as blue_hydra_chunk.log if on a non-Pwnie system
-  CHUNK_LOGFILE = if Dir.exists?('/var/log/pwnix')
+  CHUNK_LOGFILE = if ENV["BLUE_HYDRA"] == "test"
+              File.expand_path('../../blue_hydra_chunk.log', __FILE__)
+            elsif Dir.exists?('/var/log/blue_hydra')
+              File.expand_path('/var/log/blue_hydra/blue_hydra_chunk.log', __FILE__)
+            elsif Dir.exists?('/var/log/pwnix')
               File.expand_path('/var/log/pwnix/blue_hydra_chunk.log', __FILE__)
             else
               File.expand_path('../../blue_hydra_chunk.log', __FILE__)
@@ -261,10 +305,23 @@ module BlueHydra
     @@signal_spitter = setting
   end
 
+  def info_scan
+    if defined? @@info_scan
+      return @@info_scan
+    else
+      return true
+    end
+  end
+
+  def info_scan=(setting)
+    @@info_scan = setting
+  end
+
   module_function :logger, :config, :daemon_mode, :daemon_mode=, :pulse,
                   :pulse=, :rssi_logger, :demo_mode, :demo_mode=,
                   :pulse_debug, :pulse_debug=, :no_db, :no_db=,
-                  :signal_spitter, :signal_spitter=, :chunk_logger
+                  :signal_spitter, :signal_spitter=, :chunk_logger,
+                  :info_scan, :info_scan=
 end
 
 # require the actual code
@@ -314,8 +371,10 @@ DataMapper::Property::String.length(255)
 
 LEGACY_DB_PATH   = '/opt/pwnix/blue_hydra.db'
 DATA_DIR         = '/opt/pwnix/data'
-DB_DIR           = File.join(DATA_DIR, 'blue_hydra')
+PWNIE_DB_DIR     = File.join(DATA_DIR, 'blue_hydra')
+DB_DIR           = '/etc/blue_hydra'
 DB_NAME          = 'blue_hydra.db'
+PWNIE_DB_PATH    = File.join(PWNIE_DB_DIR, DB_NAME)
 DB_PATH          = File.join(DB_DIR, DB_NAME)
 
 if Dir.exists?(DATA_DIR)
@@ -337,8 +396,10 @@ end
 # 'test' and all tests should run with an in-memory db.
 db_path = if ENV["BLUE_HYDRA"] == "test" || BlueHydra.no_db
             'sqlite::memory:?cache=shared'
-          elsif Dir.exist?(DB_DIR)
+          elsif Dir.exists?(DB_DIR)
             "sqlite:#{DB_PATH}"
+          elsif Dir.exists?(PWNIE_DB_DIR)
+            "sqlite:#{PWNIE_DB_PATH}"
           else
             "sqlite:#{DB_NAME}"
           end
@@ -349,7 +410,13 @@ DataMapper.setup(:default, db_path)
 def brains_to_floor
   # in the case of an invalid / blank/ corrupt DB file we will back up the old
   # file and then create a new db to proceed.
-  db_file = Dir.exist?('/opt/pwnix/data/blue_hydra/') ?  "/opt/pwnix/data/blue_hydra/blue_hydra.db" : "blue_hydra.db"
+  db_file = if Dir.exists?('/etc/blue_hydra/')
+              "/etc/blue_hydra/blue_hydra.db"
+            elsif Dir.exists?('/opt/pwnix/data/blue_hydra/')
+              "/opt/pwnix/data/blue_hydra/blue_hydra.db"
+            else
+              "blue_hydra.db"
+            end
   BlueHydra.logger.error("#{db_file} is not valid. Backing up to #{db_file}.corrupt and recreating...")
   BlueHydra::Pulse.send_event("blue_hydra", {
     key:       'blue_hydra_db_corrupt',
