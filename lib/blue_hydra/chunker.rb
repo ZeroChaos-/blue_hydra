@@ -30,9 +30,12 @@ module BlueHydra
 
           # if we just got a new message shovel the working set into the
           # outgoing queue and reset it
-          address_count = working_set.join("").scan(/^\s*.*ddress: ((?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})/).flatten.uniq.count
+          address_list = working_set.flatten.reject{|x| x =~ /Direct address/}.join("").scan(/^\s*.*ddress: ((?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})/).flatten.uniq
+          address_count = address_list.count
           if address_count == 1
-            @outgoing_q.push working_set
+            unless BlueHydra.config["ignore_mac"].include?(address_list[0])
+              @outgoing_q.push working_set
+            end
           elsif address_count < 1
             if BlueHydra.config["chunker_debug"]
               working_set.flatten.each{|msg| BlueHydra.chunk_logger.info(msg.chomp) }
@@ -88,7 +91,7 @@ module BlueHydra
         "07", # Remote Name Req Complete
         "3d", # Remote Host Supported Features
         "04", # Connect Request
-        "0e"  # Command Complete
+        "0e", # Command Complete
       ]
 
       # if the first line of the message chunk matches one of these patterns
@@ -100,7 +103,11 @@ module BlueHydra
       # lines
       elsif chunk[0] =~ / \(0x3e\)/ && # LE Meta Event
         # Numbers from bluez monitor/packet.h static const struct subevent_data le_meta_event_table
-            chunk[1] =~ / \(0x0[12]\)/ # LE Connection Complete / LE Advertising Report
+            chunk[1] =~ / \(0x0[12d]\)/ # LE Connection Complete / LE Advertising Report / LE Extended Advertising Report
+        true
+
+      #name has been moved into MGMT Event, not sure what else, at least it has an address
+      elsif chunk[0] =~/@ MGMT Event: .* \(0x0012\)/ # @ MGMT Event: Device Fo.. (0x0012)
         true
 
       # otherwise this will get grouped with the current working set in the

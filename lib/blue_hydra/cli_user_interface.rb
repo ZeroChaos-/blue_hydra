@@ -33,7 +33,7 @@ module BlueHydra
     end
 
     def info_scan_queue
-      if BlueHydra.info_scan
+      if BlueHydra.info_scan && BlueHydra.config["info_scan_rate"].to_i != 0
         return @runner.info_scan_queue.length
       else
         return "disabled"
@@ -82,12 +82,22 @@ Press "r" to reverse the sort order
 Press "c" to change the column set
 Press "q" to exit
 
-press [Enter] key to continue....
 HELP
 
-puts msg
+      if !BlueHydra.config["ignore_mac"].empty?
+        msg << "Currently ignoring #{BlueHydra.config["ignore_mac"]}\n\n"
+      end
+      if !BlueHydra.config["ui_exc_filter_mac"].empty?
+        msg << "Currently ui excluding #{BlueHydra.config["ui_exc_filter_mac"]}\n\n"
+      end
+      if !BlueHydra.config["ui_exc_filter_prox"].empty?
+        msg << "Currently ui excluding #{BlueHydra.config["ui_exc_filter_prox"]}\n\n"
+      end
+      msg << "press [Enter] key to continue...."
 
-$stdin.gets.chomp
+      puts msg
+
+      $stdin.gets.chomp
     end
 
     # the main work loop which prints the actual data to screen
@@ -95,7 +105,7 @@ $stdin.gets.chomp
       reset         = false # determine if we need to reset the loop by restarting method
       paused        = false
       sort        ||= :_seen # default sort attribute
-      filter_mode   = BlueHydra.config["ui_filter_mode"]
+      filter_mode   = BlueHydra.config["ui_inc_filter_mode"]
       order       ||= "ascending" #default sort order
 
       # set default printable keys, aka column headers
@@ -291,7 +301,7 @@ $stdin.gets.chomp
 
           # check status of ubertooth
           if scanner_status[:ubertooth]
-            if scanner_status[:ubertooth].class == Fixnum
+            if scanner_status[:ubertooth].class == Integer
               ubertooth_time = Time.now.to_i - scanner_status[:ubertooth]
             else
               ubertooth_time = scanner_status[:ubertooth]
@@ -457,7 +467,15 @@ $stdin.gets.chomp
           # iterate across the  sorted data
           d.each do |data|
 
-            #here we handle filter/hilight control
+            #here we handle exclude filters
+            if BlueHydra.config["ui_exc_filter_mac"].include?(data[:address])
+              next
+            end
+            if BlueHydra.config["ui_exc_filter_prox"].include?("#{data[:le_proximity_uuid]}-#{data[:le_major_num]}-#{data[:le_minor_num]}")
+              next
+            end
+
+            #here we handle inc filter/hilight control
             hilight = "0"
             unless filter_mode == :disabled
               skip_data = true

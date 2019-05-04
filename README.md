@@ -69,16 +69,19 @@ The following options can be set:
 
 * `log_level`: defaults to info level, can be set to debug for much more verbosity. If set to `false` no log or rssi log will be created.
 * `bt_device`: specify device to use as main bluetooth interface, defaults to `hci0`
-* `info_scan_rate`: rate at which to run info scan in seconds, defaults to 60
+* `info_scan_rate`: rate at which to run info scan in seconds, defaults to 240.  Values too small will be set to 45.  Value of 0 disables info scanning.
 * `status_sync_rate`: rate at which to sync device status to Pulse in seconds
 * `btmon_log`: `true|false`, if set to true will log filtered btmon output
 * `btmon_rawlog`: `true|false`, if set to true will log unfiltered btmon output
 * `file`: if set to a filepath that file will be read in rather than doing live device interactions
 * `rssi_log`: `true|false`, if set will log serialized RSSI values
 * `aggressive_rssi`: `true|false`, if set will agressively send RSSIs to Pulse
-* `ui_filter_mode`: `:disabled|:hilight|:exclusive`, set ui filtering to this mode by default
+* `ui_inc_filter_mode`: `:disabled|:hilight|:exclusive`, set ui filtering to this mode by default
 * `ui_inc_filter_mac`: `- FF:FF:00:00:59:25`, set inclusive filter on this mac, each goes on a newline proceeded by hiphon and space
 * `ui_inc_filter_prox`: `- 669a0c20-0008-9191-e411-1b11d05d7707-9001-3364`, set inclusive filter on this proximity_uuid-major_number-minor_number, each goes on a newline proceeded by hiphon and space
+* `ui_exc_filter_mac`: same syntax as ui_inc_filter_mac, but exclude instead
+* `ui_exc_filter_prox`: same syntax as ui_inc_filter_prox, but exclude instead
+* `ignore_mac`: same syntax as ui_inc_filter mac, but entirely ignore device, both db and ui
 
 ## Usage
 

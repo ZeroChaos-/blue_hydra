@@ -187,7 +187,8 @@ module BlueHydra
                  set_attr(:company_type, company_type)
                when line =~ /^UUID:/
                  if company_type && company_type =~ /\(2\)/ && company_type_last_set && company_type_last_set == timestamp.split(': ')[1].to_f
-                   set_attr("#{bt_mode}_proximity_uuid".to_sym, line.split(': ')[1])
+                   flipped_prox_uuid = line.split(': ')[1].gsub('-','').scan(/.{2}/).reverse.join.scan(/(.{8})(.{4})(.{4})(.*)/).join('-')
+                   set_attr("#{bt_mode}_proximity_uuid".to_sym, flipped_prox_uuid)
                  else
                    set_attr("#{bt_mode}_company_uuid".to_sym, line.split(': ')[1])
                  end
@@ -289,7 +290,7 @@ module BlueHydra
       when line =~ /^Handle:/
         set_attr("#{bt_mode}_handle".to_sym, line.split(': ')[1])
 
-      when line =~ /^Address:/ || line =~ /^Peer address:/
+      when line =~ /^Address:/ || line =~ /^Peer address:/ || line =~ /^LE Address:/
         addr, *addr_type = line.split(': ')[1].split(" ")
         set_attr("address".to_sym, addr)
 
@@ -359,6 +360,7 @@ module BlueHydra
         if BlueHydra.config["log_level"] == 'debug'
           set_attr("#{bt_mode}_unknown".to_sym, line)
         end
+        #BlueHydra.logger.warn("Unhandled line: #{line}")
       end
     end
 

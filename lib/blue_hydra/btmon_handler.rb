@@ -139,7 +139,7 @@ module BlueHydra
       #
       # numbers from bluez monitor/packet.c static const struct event_data event_table
       return if buffer.first =~ /^</
-      return if buffer.first =~ /^@/
+      return if buffer.first =~ /^@ (?!MGMT Event: .* \(0x0012\))/ # Device Found
       return if buffer.first =~ /^> HCI Event: .* \(0x0f\)/ # "Command Status"
       return if buffer.first =~ /^> HCI Event: .* \(0x13\)/ # "Number of Completed Packets"
       return if buffer.first =~ /^> HCI Event: Unknown \(0x00\)/ 

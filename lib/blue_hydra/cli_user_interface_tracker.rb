@@ -134,7 +134,7 @@ module BlueHydra
       if attrs[:short_name]
         unless attrs[:short_name] == [nil] || cui_status[@uuid][:name]
           cui_status[@uuid][:name] = attrs[:short_name].first
-          BlueHydra.logger.warn("short name found: #{attrs[:short_name]}")
+          #BlueHydra.logger.warn("short name found: #{attrs[:short_name]}")
         end
       end
 
