@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 # encoding: UTF-8
 $0 = "BlueHydra"
+Version = '1.9.16-git'
 
 # add ../lib/ to load path 
 $:.unshift(File.dirname(File.expand_path('../../lib/blue_hydra.rb',__FILE__)))
@@ -34,6 +35,10 @@ OptionParser.new do |opts|
   end
   opts.on("--no-info", "For the purposes for fox hunting, don't info scan.  Some info may be missing, but there will be less gaps during tracking") do |v|
     options[:no_info_scan] = true
+  end
+  opts.on("-v", "--version", "Show version and quit") do |v|
+    puts "#{$0}: #{Version}"
+    exit
   end
   opts.on_tail("-h", "--help", "Show this message") do
     puts opts
