@@ -14,12 +14,27 @@ module BlueHydra
       @l2ping_threshold = (@cui_timeout - 45)
     end
 
-    # the following methods are simply alliasing data to be passed through from
-    # the actual runner class
     def cui_status
-      @runner.cui_status
+      #this gets called a lot, but we need it to always be clean.
+      #let it auto clean itself on call, at most once every 60 seconds.
+      @last_clean ||= 0
+      if Time.now.to_i - @last_clean > 59
+        # remove devices from the cui_status which have expired
+        unless BlueHydra.config["file"]
+          @runner.cui_status.keys.select do |x|
+            @runner.cui_status[x][:last_seen] < (Time.now.to_i - cui_timeout)
+          end.each do |x|
+            @runner.cui_status.delete(x)
+          end
+        end
+        @last_clean = Time.now.to_i
+      end
+
+      return @runner.cui_status
     end
 
+    # the following methods are simply alliasing data to be passed through from
+    # the actual runner class
     def scanner_status
       @runner.scanner_status
     end
@@ -378,16 +393,6 @@ HELP
           rssi:  :right,
           range: :right
         }
-
-
-        # remove devices from the cui_status which have expired
-        unless BlueHydra.config["file"]
-          cui_status.keys.select do |x|
-            cui_status[x][:last_seen] < (Time.now.to_i - cui_timeout)
-          end.each do |x|
-            cui_status.delete(x)
-          end
-        end
 
         # nothing to do if cui_status is empty (no devices or all expired)
         unless cui_status.empty?
