@@ -36,6 +36,9 @@ OptionParser.new do |opts|
   opts.on("--no-info", "For the purposes for fox hunting, don't info scan.  Some info may be missing, but there will be less gaps during tracking") do |v|
     options[:no_info_scan] = true
   end
+  opts.on("--mohawk-api", "For the purposes of making a hat to cover a mohawk, shit out the ui as json at /dev/shm/blue_hydra.json") do |v|
+    options[:file_api] = true
+  end
   opts.on("-v", "--version", "Show version and quit") do |v|
     puts "#{$0}: #{Version}"
     exit
@@ -103,6 +106,12 @@ if options[:no_info_scan]
   BlueHydra.info_scan = false
 else
   BlueHydra.info_scan = true
+end
+
+if options[:file_api]
+  BlueHydra.file_api = true
+else
+  BlueHydra.file_api = false
 end
 
 if BlueHydra.pulse

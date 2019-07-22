@@ -254,7 +254,6 @@ HELP
           end
         end
 
-
         # render the cui with and get back list of currently sortable keys for
         # next iteration of loop
         unless paused
@@ -272,6 +271,28 @@ HELP
       # once reset has been triggered we need to reset this method so
       # we just call it again on top of itself
       cui_loop
+    end
+
+    # this method gets called over and over in the cui loop to print the data
+    # table as json to a file for a web interface.  Someone thought this was a good idea.
+    def api_loop
+      begin
+        loop do
+          File.write("/dev/shm/blue_hydra.json", JSON.generate(cui_status))
+          sleep 1
+        end
+      rescue => e
+        BlueHydra.logger.error("API thread #{e.message}")
+        e.backtrace.each do |x|
+          BlueHydra.logger.error("#{x}")
+        end
+        BlueHydra::Pulse.send_event("blue_hydra",
+        {key:'blue_hydra_cui_thread_error',
+        title:'Blue Hydras api Thread Encountered An Error',
+        message:"#{e.message}",
+        severity:'ERROR'
+        })
+      end
     end
 
     # this method gets called over and over in the cui loop to print the data
@@ -416,7 +437,7 @@ HELP
             # (^) or descending (v)
             if key == sort
 
-              # determin order and add the sort indicator to the key
+              # determine order and add the sort indicator to the key
               z = order == "ascending" ? "^" : "v"
               k = "#{k} #{z}"
 
@@ -464,7 +485,7 @@ HELP
             d.reverse!
           end
 
-          # iterate across the  sorted data
+          # iterate across the sorted data
           d.each do |data|
 
             #here we handle exclude filters
