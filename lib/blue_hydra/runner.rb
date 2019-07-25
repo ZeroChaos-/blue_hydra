@@ -217,7 +217,7 @@ module BlueHydra
       end
 
       x[:cui_thread] = self.cui_thread.status unless BlueHydra.daemon_mode
-      x[:api_thread] = self.api_thread.status unless BlueHydra.file_api
+      x[:api_thread] = self.api_thread.status if BlueHydra.file_api
 
       x
     end
