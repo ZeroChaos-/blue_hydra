@@ -3,6 +3,17 @@ module BlueHydra
   # class responsible for parsing a group of message chunks into a serialized
   # hash appropriate to generate or update a device record.
   class Parser
+    BLEEE_PACKET_TYPES = {
+      '0b': 'watch_c',
+      '0c': 'handoff',
+      '0d': 'wifi_set',
+      '0e': 'hotspot',
+      '0f': 'wifi_join',
+      '10': 'nearby',
+      '07': 'airpods',
+      '05': 'airdrop'
+    }.freeze
+
     attr_accessor :attributes
 
     # initializer which takes an Array of chunks to be parsed
@@ -157,6 +168,7 @@ module BlueHydra
 
              #hack because datamapper doesn't respect varchar255 setting
              company_tmp = vals.shift.split(': ')[1]
+             company_hex = company_tmp.scan(/\(([^)]+)\)/).flatten[0].to_i.to_s(16)
              if company_tmp.length > 49 && company_tmp.scan(/\(/).count == 2
                company_tmp = company_tmp.split('(')
                company_tmp.delete_at(1)
