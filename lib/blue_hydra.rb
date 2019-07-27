@@ -334,10 +334,6 @@ module BlueHydra
                   :info_scan, :info_scan=, :file_api, :file_api=
 end
 
-if BlueHydra.file_api
-  require 'json'
-end
-
 # require the actual code
 require 'blue_hydra/btmon_handler'
 require 'blue_hydra/parser'
