@@ -294,6 +294,18 @@ HELP
       begin
         loop do
           File.write("/dev/shm/blue_hydra.json", JSON.generate(cui_status))
+          unless BlueHydra.config["file"]
+            File.write("/dev/shm/blue_hydra_internal.json", JSON.generate(
+              {processing_speed: "#{@runner.processing_speed.round}/s",
+               db_stunned: @runner.stunned,
+               result_queue: result_queue.length,
+               info_scan_queue: info_scan_queue,
+               l2ping_queue: l2ping_queue.length,
+               #discovery_timer: Time.now.to_i - scanner_status[:test_discovery].to_i,
+               #ubertooth_timer: Time.now.to_i - scanner_status[:ubertooth].to_i
+              })
+            )
+          end
           sleep 1
         end
       rescue => e
