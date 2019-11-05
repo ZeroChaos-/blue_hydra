@@ -163,6 +163,7 @@ module BlueHydra
            #   Version: 15104.61591
            #   TX power: -56 dB
            #   Data: 01adddd439aed386c76574e9ab9e11958e25c1f70ae203
+
            when grp[0] =~ /Company:/
              vals = grp.map(&:strip)
 
@@ -189,14 +190,27 @@ module BlueHydra
 
              set_attr(:company, company_tmp)
 
+             # Company can also contain multiple types....
+             # so we need to reset the parsing on every Type line
+
+             # Company: Apple, Inc. (76)
+             #   Type: Unknown (12)
+             #   Data: 00188218be794011f7678726540b
+             #   Type: Unknown (16)
+             #   Data: 1b1ca2bea2
+
              company_type = nil
              company_type_last_set = nil
              vals.each do |company_line|
                case
                when company_line =~ /^Type:/
                  company_type = company_line.split(': ')[1]
+                 company_type_hex = company_type.scan(/\(([^)]+)\)/).flatten[0].to_i.to_s(16)
                  company_type_last_set = timestamp.split(': ')[1].to_f
                  set_attr(:company_type, company_type)
+                 flipped_prox_uuid = nil
+                 major = nil
+                 minor = nil
                when company_line =~ /^UUID:/
                  if company_type && company_type =~ /\(2\)/ && company_type_last_set && company_type_last_set == timestamp.split(': ')[1].to_f
                    flipped_prox_uuid = company_line.split(': ')[1].gsub('-','').scan(/.{2}/).reverse.join.scan(/(.{8})(.{4})(.{4})(.*)/).join('-')
