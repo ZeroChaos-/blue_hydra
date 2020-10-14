@@ -14,12 +14,27 @@ module BlueHydra
       @l2ping_threshold = (@cui_timeout - 45)
     end
 
-    # the following methods are simply alliasing data to be passed through from
-    # the actual runner class
     def cui_status
-      @runner.cui_status
+      #this gets called a lot, but we need it to always be clean.
+      #let it auto clean itself on call, at most once every 60 seconds.
+      @last_clean ||= 0
+      if Time.now.to_i - @last_clean > 59
+        # remove devices from the cui_status which have expired
+        unless BlueHydra.config["file"]
+          @runner.cui_status.keys.select do |x|
+            @runner.cui_status[x][:last_seen] < (Time.now.to_i - cui_timeout)
+          end.each do |x|
+            @runner.cui_status.delete(x)
+          end
+        end
+        @last_clean = Time.now.to_i
+      end
+
+      return @runner.cui_status
     end
 
+    # the following methods are simply alliasing data to be passed through from
+    # the actual runner class
     def scanner_status
       @runner.scanner_status
     end
@@ -254,7 +269,6 @@ HELP
           end
         end
 
-
         # render the cui with and get back list of currently sortable keys for
         # next iteration of loop
         unless paused
@@ -272,6 +286,40 @@ HELP
       # once reset has been triggered we need to reset this method so
       # we just call it again on top of itself
       cui_loop
+    end
+
+    # this method gets called over and over in the cui loop to print the data
+    # table as json to a file for a web interface.  Someone thought this was a good idea.
+    def api_loop
+      begin
+        loop do
+          File.write("/dev/shm/blue_hydra.json", JSON.generate(cui_status))
+          unless BlueHydra.config["file"]
+            File.write("/dev/shm/blue_hydra_internal.json", JSON.generate(
+              {processing_speed: "#{@runner.processing_speed.round}/s",
+               db_stunned: @runner.stunned,
+               result_queue: result_queue.length,
+               info_scan_queue: info_scan_queue,
+               l2ping_queue: l2ping_queue.length,
+               #discovery_timer: Time.now.to_i - scanner_status[:test_discovery].to_i,
+               #ubertooth_timer: Time.now.to_i - scanner_status[:ubertooth].to_i
+              })
+            )
+          end
+          sleep 1
+        end
+      rescue => e
+        BlueHydra.logger.error("API thread #{e.message}")
+        e.backtrace.each do |x|
+          BlueHydra.logger.error("#{x}")
+        end
+        BlueHydra::Pulse.send_event("blue_hydra",
+        {key:'blue_hydra_cui_thread_error',
+        title:'Blue Hydras api Thread Encountered An Error',
+        message:"#{e.message}",
+        severity:'ERROR'
+        })
+      end
     end
 
     # this method gets called over and over in the cui loop to print the data
@@ -358,16 +406,6 @@ HELP
           range: :right
         }
 
-
-        # remove devices from the cui_status which have expired
-        unless BlueHydra.config["file"]
-          cui_status.keys.select do |x|
-            cui_status[x][:last_seen] < (Time.now.to_i - cui_timeout)
-          end.each do |x|
-            cui_status.delete(x)
-          end
-        end
-
         # nothing to do if cui_status is empty (no devices or all expired)
         unless cui_status.empty?
 
@@ -416,7 +454,7 @@ HELP
             # (^) or descending (v)
             if key == sort
 
-              # determin order and add the sort indicator to the key
+              # determine order and add the sort indicator to the key
               z = order == "ascending" ? "^" : "v"
               k = "#{k} #{z}"
 
@@ -464,7 +502,7 @@ HELP
             d.reverse!
           end
 
-          # iterate across the  sorted data
+          # iterate across the sorted data
           d.each do |data|
 
             #here we handle exclude filters
