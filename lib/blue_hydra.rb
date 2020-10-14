@@ -379,11 +379,13 @@ end
 # set all String properties to have a default length of 255
 DataMapper::Property::String.length(255)
 
+RAMDISK_DB_DIR   = '/mnt/blue_hydra'
 LEGACY_DB_PATH   = '/opt/pwnix/blue_hydra.db'
 DATA_DIR         = '/opt/pwnix/data'
 PWNIE_DB_DIR     = File.join(DATA_DIR, 'blue_hydra')
 DB_DIR           = '/etc/blue_hydra'
 DB_NAME          = 'blue_hydra.db'
+RAMDISK_DB_PATH  = File.join(RAMDISK_DB_DIR, DB_NAME)
 PWNIE_DB_PATH    = File.join(PWNIE_DB_DIR, DB_NAME)
 DB_PATH          = File.join(DB_DIR, DB_NAME)
 
@@ -397,15 +399,18 @@ if File.exists?(LEGACY_DB_PATH) && Dir.exists?(DB_DIR)
   FileUtils.mv(LEGACY_DB_PATH, DB_PATH) unless File.exists?(DB_PATH)
 end
 
-
+# The path for a mounted tmpfs (RAM disk) will be used first if it is mounted on /mnt/blue_hydra
+#
 # The database will be stored in /opt/pwnix/blue_hydra.db if we are on a system
 # which the Pwnie Express chef scripts have been run. Otherwise it will attempt
-# to create a sqlite db whereever the run was initiated.
+# to create a sqlite db where the run was initiated.
 #
 # When running the rspec tets the BLUE_HYDRA environmental value will be set to
 # 'test' and all tests should run with an in-memory db.
 db_path = if ENV["BLUE_HYDRA"] == "test" || BlueHydra.no_db
             'sqlite::memory:?cache=shared'
+          elsif Dir.exists?(RAMDISK_DB_DIR)
+            "sqlite:#{RAMDISK_DB_PATH}"
           elsif Dir.exists?(DB_DIR)
             "sqlite:#{DB_PATH}"
           elsif Dir.exists?(PWNIE_DB_DIR)
