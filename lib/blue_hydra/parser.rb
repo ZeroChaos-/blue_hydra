@@ -3,6 +3,17 @@ module BlueHydra
   # class responsible for parsing a group of message chunks into a serialized
   # hash appropriate to generate or update a device record.
   class Parser
+    BLEEE_PACKET_TYPES = {
+      '0b': 'watch_c',
+      '0c': 'handoff',
+      '0d': 'wifi_set',
+      '0e': 'hotspot',
+      '0f': 'wifi_join',
+      '10': 'nearby',
+      '07': 'airpods',
+      '05': 'airdrop'
+    }.freeze
+
     attr_accessor :attributes
 
     # initializer which takes an Array of chunks to be parsed
@@ -152,11 +163,13 @@ module BlueHydra
            #   Version: 15104.61591
            #   TX power: -56 dB
            #   Data: 01adddd439aed386c76574e9ab9e11958e25c1f70ae203
+
            when grp[0] =~ /Company:/
              vals = grp.map(&:strip)
 
              #hack because datamapper doesn't respect varchar255 setting
              company_tmp = vals.shift.split(': ')[1]
+             company_hex = company_tmp.scan(/\(([^)]+)\)/).flatten[0].to_i.to_s(16)
              if company_tmp.length > 49 && company_tmp.scan(/\(/).count == 2
                company_tmp = company_tmp.split('(')
                company_tmp.delete_at(1)
@@ -177,36 +190,49 @@ module BlueHydra
 
              set_attr(:company, company_tmp)
 
+             # Company can also contain multiple types....
+             # so we need to reset the parsing on every Type line
+
+             # Company: Apple, Inc. (76)
+             #   Type: Unknown (12)
+             #   Data: 00188218be794011f7678726540b
+             #   Type: Unknown (16)
+             #   Data: 1b1ca2bea2
+
              company_type = nil
              company_type_last_set = nil
-             vals.each do |line|
+             vals.each do |company_line|
                case
-               when line =~ /^Type:/
-                 company_type = line.split(': ')[1]
+               when company_line =~ /^Type:/
+                 company_type = company_line.split(': ')[1]
+                 company_type_hex = company_type.scan(/\(([^)]+)\)/).flatten[0].to_i.to_s(16)
                  company_type_last_set = timestamp.split(': ')[1].to_f
                  set_attr(:company_type, company_type)
-               when line =~ /^UUID:/
+                 flipped_prox_uuid = nil
+                 major = nil
+                 minor = nil
+               when company_line =~ /^UUID:/
                  if company_type && company_type =~ /\(2\)/ && company_type_last_set && company_type_last_set == timestamp.split(': ')[1].to_f
-                   flipped_prox_uuid = line.split(': ')[1].gsub('-','').scan(/.{2}/).reverse.join.scan(/(.{8})(.{4})(.{4})(.*)/).join('-')
+                   flipped_prox_uuid = company_line.split(': ')[1].gsub('-','').scan(/.{2}/).reverse.join.scan(/(.{8})(.{4})(.{4})(.*)/).join('-')
                    set_attr("#{bt_mode}_proximity_uuid".to_sym, flipped_prox_uuid)
                  else
-                   set_attr("#{bt_mode}_company_uuid".to_sym, line.split(': ')[1])
+                   set_attr("#{bt_mode}_company_uuid".to_sym, company_line.split(': ')[1])
                  end
-               when line =~/^Version:/
+               when company_line =~/^Version:/
                  if company_type && company_type =~ /\(2\)/ && company_type_last_set && company_type_last_set == timestamp.split(': ')[1].to_f
                    #bluez decodes this as little endian but it's actually big so we have to reverse it
-                   major = line.split(': ')[1].split('.')[0].to_i.to_s(16).rjust(4, '0').scan(/.{2}/).map { |i| i.to_i(16).chr }.join.unpack('S<*').first
-                   minor = line.split(': ')[1].split('.')[1].to_i.to_s(16).rjust(4, '0').scan(/.{2}/).map { |i| i.to_i(16).chr }.join.unpack('S<*').first
+                   major = company_line.split(': ')[1].split('.')[0].to_i.to_s(16).rjust(4, '0').scan(/.{2}/).map { |i| i.to_i(16).chr }.join.unpack('S<*').first
+                   minor = company_line.split(': ')[1].split('.')[1].to_i.to_s(16).rjust(4, '0').scan(/.{2}/).map { |i| i.to_i(16).chr }.join.unpack('S<*').first
                    set_attr("#{bt_mode}_major_num".to_sym, major)
                    set_attr("#{bt_mode}_minor_num".to_sym, minor)
                  else
-                   set_attr("#{bt_mode}_company_version".to_sym, line.split(': ')[1])
+                   set_attr("#{bt_mode}_company_version".to_sym, company_line.split(': ')[1])
                  end
-               when line =~ /^TX power:/
-                 tx_power = line.split(': ')[1]
+               when company_line =~ /^TX power:/
+                 tx_power = company_line.split(': ')[1]
                  set_attr("#{bt_mode}_tx_power".to_sym, tx_power)
-               when line =~ /^Data:/
-                 set_attr("#{bt_mode}_company_data".to_sym, line.split(': ')[1])
+               when company_line =~ /^Data:/
+                 set_attr("#{bt_mode}_company_data".to_sym, company_line.split(': ')[1])
                end
              end
 

@@ -18,6 +18,7 @@ module BlueHydra
                   :empty_spittoon_thread,
                   :cui_status,
                   :cui_thread,
+                  :api_thread,
                   :info_scan_queue,
                   :query_history,
                   :scanner_status,
@@ -128,6 +129,8 @@ module BlueHydra
         # we are in daemon mode
         start_cui_thread unless BlueHydra.daemon_mode
 
+        # start the thread responsible for printing the file api if requested
+        start_api_thread if BlueHydra.file_api
 
         # unless we are reading from a file we need to determine if we have an
         # ubertooth available and then initialize a thread to manage that
@@ -214,6 +217,7 @@ module BlueHydra
       end
 
       x[:cui_thread] = self.cui_thread.status unless BlueHydra.daemon_mode
+      x[:api_thread] = self.api_thread.status if BlueHydra.file_api
 
       x
     end
@@ -261,6 +265,7 @@ module BlueHydra
       self.chunker_thread.kill        if self.chunker_thread
       self.parser_thread.kill         if self.parser_thread
       self.result_thread.kill         if self.result_thread
+      self.api_thread.kill            if self.api_thread
       self.cui_thread.kill            if self.cui_thread
       self.signal_spitter_thread.kill if self.signal_spitter_thread
       self.empty_spittoon_thread.kill if self.empty_spittoon_thread
@@ -689,6 +694,15 @@ module BlueHydra
       end
     end
 
+    # thread to manage the CUI output where availalbe
+    def start_api_thread
+      BlueHydra.logger.info("API thread starting")
+      self.api_thread = Thread.new do
+        api  = BlueHydra::CliUserInterface.new(self)
+        api.api_loop
+      end
+    end
+
     # helper method to push addresses intothe scan queues with a little
     # pre-processing
     def push_to_queue(mode, address)
@@ -770,7 +784,7 @@ module BlueHydra
 
             if address
 
-              unless BlueHydra.daemon_mode
+              if !BlueHydra.daemon_mode || BlueHydra.file_api
                 tracker = CliUserInterfaceTracker.new(self, chunk, attrs, address)
                 tracker.update_cui_status
               end

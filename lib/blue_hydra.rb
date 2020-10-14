@@ -261,6 +261,16 @@ module BlueHydra
     @@daemon_mode = setting
   end
 
+  # getter for fileapi  option
+  def file_api
+    @@file_api ||= false
+  end
+
+  # setter for file api option
+  def file_api=(setting)
+    @@file_api = setting
+  end
+
   # getter for demo mode option
   def demo_mode
     @@demo_mode ||= false
@@ -321,7 +331,7 @@ module BlueHydra
                   :pulse=, :rssi_logger, :demo_mode, :demo_mode=,
                   :pulse_debug, :pulse_debug=, :no_db, :no_db=,
                   :signal_spitter, :signal_spitter=, :chunk_logger,
-                  :info_scan, :info_scan=
+                  :info_scan, :info_scan=, :file_api, :file_api=
 end
 
 # require the actual code
