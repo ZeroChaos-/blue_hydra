@@ -13,8 +13,8 @@ Ensure that the following packages are installed:
 ```
 bluez
 bluez-test-scripts
-python-bluez
-python-dbus
+python3-bluez
+python3-dbus
 ubertooth # where applicable
 sqlite3
 libsqlite3-dev
@@ -24,7 +24,7 @@ If your chosen distro is still on bluez 4 please choose a more up to date distro
 
 On Debian-based systems, these packages can be installed with the following command line:
 
-```sudo apt-get install bluez bluez-test-scripts python-bluez python-dbus libsqlite3-dev ubertooth```
+```sudo apt-get install bluez bluez-test-scripts python3-bluez python3-dbus libsqlite3-dev ubertooth```
 
 To install the needed gems it may be helpful (but not required) to use bundler:
 
