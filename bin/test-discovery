@@ -1,4 +1,4 @@
-#!/usr/bin/python2.7
+#!/usr/bin/python3
 
 from __future__ import absolute_import
 
@@ -6,20 +6,22 @@ from optparse import OptionParser, make_option
 import dbus
 import dbus.mainloop.glib
 import sys
-#gentoo
+# gentoo
 sys.path.append('/usr/lib64/bluez/test')
-#gentoo - arm
+# gentoo - arm
 sys.path.append('/usr/lib/bluez/test')
-#kali2
+# kali2
 sys.path.append('/usr/share/doc/bluez-test-scripts/examples')
-#ubuntu
+# ubuntu
 sys.path.append('/usr/share/doc/bluez-tests/examples')
 import bluezutils
 import time
 
+
 def property_changed(name, value):
 	if (name == "Discovering" and not value):
 		sys.exit(0)
+
 
 if __name__ == '__main__':
 	dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
