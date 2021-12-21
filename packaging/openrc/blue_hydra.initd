@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+# Copyright 1999-2019 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
+name="blue_hydra"
+command="/usr/sbin/blue_hydra"
+command_args="--daemonize ${BLUE_HYDRA_OPTIONS}"
+supervisor="supervise-daemon"
+output_log="/var/log/blue_hydra_service.log"
+error_log="${output_log}"
+pidfile="/run/blue_hydra_service.pid"

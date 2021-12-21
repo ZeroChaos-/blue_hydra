@@ -5,6 +5,7 @@ do we need to send status with aggressive_rssi?
 add in a passive le mode
 add in a passive classic mode
 when ubertooth is available, specifically detect inquiries
+add support for ubertooth index
 
 refactor pass & code cleanup
 extend tests a bit
