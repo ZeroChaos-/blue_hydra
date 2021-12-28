@@ -62,6 +62,7 @@ module BlueHydra
   DEFAULT_CONFIG = {
     "log_level"          => "info",
     "bt_device"          => "hci0",       # change for external ud100
+    "ubertooth_index"    => "0",          # ubertooth device index
     "info_scan_rate"     => 240,          # 4 minutes in seconds
     "btmon_log"          => false,        # if set will write used btmon output to a log file
     "btmon_rawlog"       => false,        # if set will write raw btmon output to a log file

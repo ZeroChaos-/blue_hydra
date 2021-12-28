@@ -140,23 +140,23 @@ module BlueHydra
           sleep 1
           # Handle ubertooth
           self.scanner_status[:ubertooth] = "Detecting"
-          if system("ubertooth-util -v > /dev/null 2>&1")
+          if system("ubertooth-util -v -U #{BlueHydra.config["ubertooth_index"]} > /dev/null 2>&1")
             self.scanner_status[:ubertooth] = "Found hardware"
             BlueHydra.logger.debug("Found ubertooth hardware")
             sleep 1
-            if system("ubertooth-util -r > /dev/null 2>&1")
+            if system("ubertooth-util -r -U #{BlueHydra.config["ubertooth_index"]} > /dev/null 2>&1")
               self.scanner_status[:ubertooth] = "hardware responsive"
               BlueHydra.logger.debug("hardware is responsive")
               sleep 1
               if system("ubertooth-rx -h 2>&1 | grep -q Survey")
-                @ubertooth_command = "ubertooth-rx -z -t 40"
+                @ubertooth_command = "ubertooth-rx -z -t 40 -U #{BlueHydra.config["ubertooth_index"]}"
                 BlueHydra.logger.debug("Found working ubertooth-rx -z")
                 self.scanner_status[:ubertooth] = "ubertooth-rx"
               end
               unless @ubertooth_command
                 sleep 1
                 if system("ubertooth-scan -t 1 > /dev/null 2>&1")
-                  @ubertooth_command = "ubertooth-scan -t 40"
+                  @ubertooth_command = "ubertooth-scan -t 40 -U #{BlueHydra.config["ubertooth_index"]}"
                   BlueHydra.logger.debug("Found working ubertooth-scan")
                   self.scanner_status[:ubertooth] = "ubertooth-scan"
                 else
@@ -636,7 +636,7 @@ module BlueHydra
           loop do
             begin
               # Do a scan with ubertooth
-              ubertooth_reset = BlueHydra::Command.execute3("ubertooth-util -r")
+              ubertooth_reset = BlueHydra::Command.execute3("ubertooth-util -U #{BlueHydra.config["ubertooth_index"]} -r")
               if ubertooth_reset[:stderr]
                 BlueHydra.logger.error("Error with ubertooth-util -r...")
                 ubertooth_reset.split("\n").each do |ln|
