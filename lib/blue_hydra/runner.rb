@@ -328,6 +328,16 @@ module BlueHydra
           end
         end
       end
+      # Bluez 5.64 seems to have a bug in reset where the device shows powered but fails as not ready
+      sleep 1
+      interface_powerup = BlueHydra::Command.execute3("printf \"select BlueHydra::LOCAL_ADAPTER_ADDRESS.split(':')[2,4].join(':')\npower on\n\" | bluetoothctl")[:stderr]
+      if interface_powerup
+        BlueHydra.logger.error("Error with bluetoothctl power on...")
+        interface_powerup.split("\n").each do |ln|
+          BlueHydra.logger.error(ln)
+        end
+      end
+      sleep 1
     end
 
     # thread responsible for sending interesting commands to the hci device so
