@@ -88,7 +88,7 @@ The following options can be set:
 It may also be useful to check blue_hydra --help for additional command line options.  At this time it looks like this:
 
 ```
-Usage: BlueHydra [options]
+Usage: blue_hydra [options]
     -d, --daemonize                  Suppress output and run in daemon mode
     -z, --demo                       Hide mac addresses in CLI UI
     -p, --pulse                      Send results to hermes
