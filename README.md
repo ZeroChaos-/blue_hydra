@@ -127,7 +127,7 @@ On Debian like systems, this can be resolved by setting locale encodings as foll
 sudo locale-gen en_US.UTF-8 
 sudo locale-gen en en_US en_US.UTF-8
 sudo dpkg-reconfigure locales
-export LC_ALL = "en_US"
+export LC_ALL="en_US.UTF-8"
 ```
 
 This issue and solution brought up by [llazzaro](https://github.com/llazzaro)
