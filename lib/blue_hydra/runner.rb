@@ -140,12 +140,13 @@ module BlueHydra
           sleep 1
           # Handle ubertooth
           self.scanner_status[:ubertooth] = "Detecting"
-          if system("ubertooth-util -v -U #{BlueHydra.config["ubertooth_index"]} > /dev/null 2>&1")
+          ubertooth_util_v = BlueHydra::Command.execute3("ubertooth-util -v -U #{BlueHydra.config["ubertooth_index"]}")
+          if ubertooth_util_v[:exit_code] == 0
             self.scanner_status[:ubertooth] = "Found hardware"
             BlueHydra.logger.debug("Found ubertooth hardware")
             sleep 1
-            ubertooth_util = BlueHydra::Command.execute3("ubertooth-util -r -U #{BlueHydra.config["ubertooth_index"]}")
-            if ubertooth_util[:exit_code] == 0
+            ubertooth_util_r = BlueHydra::Command.execute3("ubertooth-util -r -U #{BlueHydra.config["ubertooth_index"]}")
+            if ubertooth_util_r[:exit_code] == 0
               self.scanner_status[:ubertooth] = "hardware responsive"
               BlueHydra.logger.debug("hardware is responsive")
               sleep 1
@@ -167,18 +168,28 @@ module BlueHydra
               end
             else
               self.scanner_status[:ubertooth] = "hardware unresponsive"
+              if ubertooth_util_r[:stdout] != ""
+                ubertooth_util_r[:stdout].each do |ln|
+                  BlueHydra.logger.debug(ln)
+                end
+              end
+              if ubertooth_util_r[:stderr] != ""
+                ubertooth_util_r[:stderr].each do |ln|
+                  BlueHydra.logger.debug(ln)
+                end
+              end
               BlueHydra.logger.error("hardware is present but ubertooth-util -r fails")
             end
             start_ubertooth_thread if @ubertooth_command
           else
             self.scanner_status[:ubertooth] = "No hardware detected"
-            if ubertooth_util[:stdout] != ""
-              ubertooth_util[:stdout].each do |ln|
+            if ubertooth_util_v[:stdout] != ""
+              ubertooth_util_v[:stdout].each do |ln|
                 BlueHydra.logger.debug(ln)
               end
             end
-            if ubertooth_util[:stderr] != ""
-              ubertooth_util[:stderr].each do |ln|
+            if ubertooth_util_v[:stderr] != ""
+              ubertooth_util_v[:stderr].each do |ln|
                 BlueHydra.logger.debug(ln)
               end
             end
