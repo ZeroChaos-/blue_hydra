@@ -330,7 +330,7 @@ module BlueHydra
       end
       # Bluez 5.64 seems to have a bug in reset where the device shows powered but fails as not ready
       sleep 1
-      interface_powerup = BlueHydra::Command.execute3("printf \"select BlueHydra::LOCAL_ADAPTER_ADDRESS.split(':')[2,4].join(':')\npower on\n\" | bluetoothctl")[:stderr]
+      interface_powerup = BlueHydra::Command.execute3("printf \"select #{BlueHydra::LOCAL_ADAPTER_ADDRESS.split}\npower on\n\" | timeout 5 bluetoothctl",6)[:stderr]
       if interface_powerup
         BlueHydra.logger.error("Error with bluetoothctl power on...")
         interface_powerup.split("\n").each do |ln|
@@ -475,6 +475,7 @@ module BlueHydra
                   # gentoo (not systemd)
                   #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.ServiceUnknown: The name org.bluez was not provided by any .service files
                   #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.ServiceUnknown: The name :1.[0-9]{3} was not provided by any .service files
+                  #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.NameHasNoOwner: Could not get owner of name 'org.bluez': no such name
                   raise BluetoothdDbusError
                 elsif discovery_errors =~ /KeyboardInterrupt/
                   # Sometimes the interrupt gets passed to test-discovery so assume it was meant for us
