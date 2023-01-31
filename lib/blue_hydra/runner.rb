@@ -311,6 +311,100 @@ module BlueHydra
       end
     end
 
+    def bluetoothdDbusError
+      BlueHydra.logger.info("Bluetoothd errors, attempting to recover...")
+      bluetoothd_errors += 1
+      begin
+        if bluetoothd_errors == 1
+          if ::File.executable?(`which rc-service 2> /dev/null`.chomp)
+            service = "rc-service"
+          elsif ::File.executable?(`which service 2> /dev/null`.chomp)
+            service = "service"
+          else
+            service = false
+          end
+
+          # Is bluetoothd running?
+          bluetoothd_pid = `pgrep bluetoothd`.chomp
+          unless bluetoothd_pid == ""
+            # Does init own bluetoothd?
+            if `ps -o ppid= #{bluetoothd_pid}`.chomp =~ /\s1/
+              if service
+                BlueHydra.logger.info("Restarting bluetoothd...")
+                bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
+              else
+                bluetoothd_restart ||= {}
+                bluetoothd_restart[:exit_code] == 127
+              end
+              sleep 3
+            else
+              # not controled by init, bail
+              unless BlueHydra.daemon_mode
+                self.cui_thread.kill if self.cui_thread
+                puts "Bluetoothd is running but not controlled by init or functioning, please restart it manually."
+              end
+              BlueHydra.logger.fatal("Bluetoothd is running but not controlled by init or functioning, please restart it manually.")
+              BlueHydra::Pulse.send_event('blue_hydra',
+                                          {key:'blue_hydra_bluetoothd_error',
+                                           title:'Blue Hydra Encounterd Unrecoverable bluetoothd Error',
+                                           message:"bluetoothd is running but not controlled by init or functioning",
+                                           severity:'FATAL'
+                                          })
+              exit 1
+            end
+          else
+            # bluetoothd isn't running at all, attempt to restart through init
+            if service
+              BlueHydra.logger.info("Starting bluetoothd...")
+              bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
+            else
+              bluetoothd_restart ||= {}
+              bluetoothd_restart[:exit_code] == 127
+            end
+            sleep 3
+          end
+          unless bluetoothd_restart[:exit_code] == 0
+            bluetoothd_errors += 1
+          end
+        end
+        if bluetoothd_errors > 1
+          unless BlueHydra.daemon_mode
+            self.cui_thread.kill if self.cui_thread
+            puts "Bluetoothd is not functioning as expected and auto-restart failed."
+            puts 'Unable to control system services, "service" and "rc-service" are both missing?' unless service
+            puts "Please restart bluetoothd and try again."
+          end
+          if bluetoothd_restart[:stderr]
+            BlueHydra.logger.error("Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}")
+            BlueHydra::Pulse.send_event('blue_hydra',
+                                        {key:'blue_hydra_bluetoothd_restart_failed',
+                                         title:'Blue Hydra Failed To Restart bluetoothd',
+                                         message:"Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}",
+                                         severity:'ERROR'
+                                        })
+          end
+          BlueHydra.logger.fatal("Bluetoothd is not functioning as expected and we failed to automatically recover.")
+          BlueHydra::Pulse.send_event('blue_hydra',
+                                      {key:'blue_hydra_bluetoothd_jank',
+                                       title:'Blue Hydra Unable To Recover From Bluetoothd Error',
+                                       message:"Bluetoothd is not functioning as expected and we failed to automatically recover.",
+                                       severity:'FATAL'
+                                      })
+          exit 1
+        end
+      rescue Errno::ENOMEM, NoMemoryError
+        BlueHydra::Pulse.send_event('blue_hydra',
+                                    {
+                                      key: "bluehydra_oom",
+                                      title: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
+                                      message: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
+                                      severity: "FATAL"
+                                    })
+        exit 1
+      end
+      return bluetoothd_errors
+    end
+
     # helper method to reset the interface as needed
     def hci_reset
       # interface reset
@@ -330,10 +424,21 @@ module BlueHydra
       end
       # Bluez 5.64 seems to have a bug in reset where the device shows powered but fails as not ready
       sleep 1
-      interface_powerup = BlueHydra::Command.execute3("printf \"select #{BlueHydra::LOCAL_ADAPTER_ADDRESS.split}\npower on\n\" | timeout 5 bluetoothctl")[:stderr]
-      if interface_powerup
+      interface_powerup = BlueHydra::Command.execute3("printf \"select #{BlueHydra::LOCAL_ADAPTER_ADDRESS.split}\npower on\n\" | timeout 5 bluetoothctl")
+      if interface_powerup[:exit_code] == 124
+        if interface_powerup[:stdout] ~= /Waiting to connect to bluetoothd.../i
+          BlueHydra.logger.info("bluetoothctl unable to connect to bluetoothd")
+          bluetoothdDbusError
+        else
+          BlueHydra.logger.warn("Timeout occurred while powering on bluetooth adapter ${BlueHydra.config["bt_device"]}")
+          interface_powerup[:stdout].split("\n").each do |ln|
+            BlueHydra.logger.error(ln)
+          end
+        end
+      end
+      if interface_powerup[:stderr]
         BlueHydra.logger.error("Error with bluetoothctl power on...")
-        interface_powerup.split("\n").each do |ln|
+        interface_powerup[:stderr].split("\n").each do |ln|
           BlueHydra.logger.error(ln)
         end
       end
@@ -476,7 +581,7 @@ module BlueHydra
                   #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.ServiceUnknown: The name org.bluez was not provided by any .service files
                   #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.ServiceUnknown: The name :1.[0-9]{3} was not provided by any .service files
                   #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.NameHasNoOwner: Could not get owner of name 'org.bluez': no such name
-                  raise BluetoothdDbusError
+                  bluetoothd_errors = bluetoothdDbusError
                 elsif discovery_errors =~ /KeyboardInterrupt/
                   # Sometimes the interrupt gets passed to test-discovery so assume it was meant for us
                   BlueHydra.logger.info("BlueHydra Killed! Exiting... SIGINT")
@@ -490,97 +595,7 @@ module BlueHydra
               end
 
               bluez_errors = 0
-              bluetoothd_errors = 0
 
-            rescue BluetoothdDbusError
-              BlueHydra.logger.info("Bluetoothd errors, attempting to recover...")
-              bluetoothd_errors += 1
-              begin
-              if bluetoothd_errors == 1
-                if ::File.executable?(`which service 2> /dev/null`.chomp)
-                  service = "service"
-                elsif ::File.executable?(`which rc-service 2> /dev/null`.chomp)
-                  service = "rc-service"
-                else
-                  service = false
-                end
-
-                # Is bluetoothd running?
-                bluetoothd_pid = `pgrep bluetoothd`.chomp
-                unless bluetoothd_pid == ""
-                  # Does init own bluetoothd?
-                  if `ps -o ppid= #{bluetoothd_pid}`.chomp =~ /\s1/
-                    if service
-                      bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
-                    else
-                      bluetoothd_restart ||= {}
-                      bluetoothd_restart[:exit_code] == 127
-                    end
-                    sleep 3
-                  else
-                    # not controled by init, bail
-                    unless BlueHydra.daemon_mode
-                      self.cui_thread.kill if self.cui_thread
-                      puts "Bluetoothd is running but not controlled by init or functioning, please restart it manually."
-                    end
-                    BlueHydra.logger.fatal("Bluetoothd is running but not controlled by init or functioning, please restart it manually.")
-                    BlueHydra::Pulse.send_event('blue_hydra',
-                    {key:'blue_hydra_bluetoothd_error',
-                    title:'Blue Hydra Encounterd Unrecoverable bluetoothd Error',
-                    message:"bluetoothd is running but not controlled by init or functioning",
-                    severity:'FATAL'
-                    })
-                    exit 1
-                  end
-                else
-                  # bluetoothd isn't running at all, attempt to restart through init
-                  if service
-                    bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
-                  else
-                    bluetoothd_restart ||= {}
-                    bluetoothd_restart[:exit_code] == 127
-                  end
-                  sleep 3
-                end
-                unless bluetoothd_restart[:exit_code] == 0
-                  bluetoothd_errors += 1
-                end
-              end
-              rescue Errno::ENOMEM, NoMemoryError
-                BlueHydra::Pulse.send_event('blue_hydra',
-                 {
-                  key: "bluehydra_oom",
-                  title: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
-                  message: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
-                  severity: "FATAL"
-                 })
-                exit 1
-              end
-              if bluetoothd_errors > 1
-                unless BlueHydra.daemon_mode
-                  self.cui_thread.kill if self.cui_thread
-                  puts "Bluetoothd is not functioning as expected and auto-restart failed."
-                  puts 'Unable to control system services, "service" and "rc-service" are both missing?' unless service
-                  puts "Please restart bluetoothd and try again."
-                end
-                if bluetoothd_restart[:stderr]
-                  BlueHydra.logger.error("Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}")
-                  BlueHydra::Pulse.send_event('blue_hydra',
-                  {key:'blue_hydra_bluetoothd_restart_failed',
-                  title:'Blue Hydra Failed To Restart bluetoothd',
-                  message:"Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}",
-                  severity:'ERROR'
-                  })
-                end
-                BlueHydra.logger.fatal("Bluetoothd is not functioning as expected and we failed to automatically recover.")
-                BlueHydra::Pulse.send_event('blue_hydra',
-                {key:'blue_hydra_bluetoothd_jank',
-                title:'Blue Hydra Unable To Recover From Bluetoothd Error',
-                message:"Bluetoothd is not functioning as expected and we failed to automatically recover.",
-                severity:'FATAL'
-                })
-                exit 1
-              end
             rescue BluezNotReadyError
               BlueHydra.logger.info("Bluez reports not ready, attempting to recover...")
               bluez_errors += 1

@@ -19,7 +19,6 @@ require 'louis'
 $:.unshift(File.dirname(__FILE__))
 
 # Helpful Errors to raise in specific cased.
-class BluetoothdDbusError < StandardError; end
 class BluezNotReadyError < StandardError; end
 class FailedThreadError < StandardError; end
 class BtmonExitedError < StandardError; end
