@@ -35,22 +35,12 @@ module BlueHydra
   # 1.2.0 drop status sync, restart will use a reset message to reset statuses if we miss both the original message and the daily changed syncs
   VERSION = '1.2.0'
 
-  # Config file located in /opt/pwnix/pwnix-config/blue_hydra.yml on sensors
-  # or in the local directory if run on a non-Pwnie device.
-  LEGACY_CONFIG_FILE = if Dir.exists?('/opt/pwnix/pwnix-config')
-              '/opt/pwnix/pwnix-config/blue_hydra.json'
-            else
-              File.expand_path('../../blue_hydra.json', __FILE__)
-            end
-
-  # Config file located in /opt/pwnix/pwnix-config/blue_hydra.yml on sensors
-  # or in the local directory if run on a non-Pwnie device.
+  # Config file located in /etc/blue_hydra/blue_hydra.yml when installed system-wide
+  # or in the local directory if run from a git checkout.
   CONFIG_FILE = if ENV["BLUE_HYDRA"] == "test"
               File.expand_path('../../blue_hydra.yml', __FILE__)
             elsif Dir.exists?('/etc/blue_hydra')
               '/etc/blue_hydra/blue_hydra.yml'
-            elsif Dir.exists?('/opt/pwnix/data/blue_hydra')
-              '/opt/pwnix/data/blue_hydra/blue_hydra.yml'
             else
               File.expand_path('../../blue_hydra.yml', __FILE__)
             end
@@ -78,17 +68,6 @@ module BlueHydra
     "chunker_debug"      => false
   }
 
-  if File.exists?(LEGACY_CONFIG_FILE)
-    old_config = JSON.parse(
-      File.read(LEGACY_CONFIG_FILE)
-    )
-    File.unlink(LEGACY_CONFIG_FILE)
-  else
-    old_config = {}
-  end
-
-  config_base = DEFAULT_CONFIG.merge(old_config)
-
   # Create config file with defaults if missing or load and update.
   @@config = if File.exists?(CONFIG_FILE)
                new_config = YAML.load(File.read(CONFIG_FILE))
@@ -113,9 +92,9 @@ module BlueHydra
                #migration
                (new_config["ui_inc_filter_mode"] = new_config["ui_filter_mode"]) if new_config["ui_filter_mode"]
                new_config.reject!{|k,v| v == nil}
-               config_base.merge(new_config)
+               DEFAULT_CONFIG.merge(new_config)
              else
-               config_base
+               DEFAULT_CONFIG
              end
 
   #remove keys we migrated away from
@@ -126,14 +105,11 @@ module BlueHydra
   # new config options and have them show up in the file after running
   File.write(CONFIG_FILE, @@config.to_yaml.gsub("---\n",''))
 
-  # Logs will be written to /var/log/blue_hydra, then, /var/log/pwnix/blue_hydra.log and
-  # in the local directory as blue_hydra.log if niether path exists
+  # blue_hydra.log will be written to /var/log/blue_hydra if the path exists, or in the local directory
   LOGFILE = if ENV["BLUE_HYDRA"] == "test"
               File.expand_path('../../blue_hydra.log', __FILE__)
             elsif Dir.exists?('/var/log/blue_hydra')
               File.expand_path('/var/log/blue_hydra/blue_hydra.log', __FILE__)
-            elsif Dir.exists?('/var/log/pwnix')
-              File.expand_path('/var/log/pwnix/blue_hydra.log', __FILE__)
             else
               File.expand_path('../../blue_hydra.log', __FILE__)
             end
@@ -183,14 +159,11 @@ module BlueHydra
 
   # the RSSI log will only get used if the appropriate config value is set
   #
-  # Logs will be written to /var/log/blue_hydra/blue_hydra_rssi.log, then /var/log/pwnix/blue_hydra_rssi.log and
-  # in the local directory as blue_hydra_rssi.log if niether exist.
+  # blue_hydra_rssi.log will be written to /var/log/blue_hydra if the path exists, or in the local directory
   RSSI_LOGFILE = if ENV["BLUE_HYDRA"] == "test"
               File.expand_path('../../blue_hydra_rssi.log', __FILE__)
             elsif Dir.exists?('/var/log/blue_hydra')
               File.expand_path('/var/log/blue_hydra/blue_hydra_rssi.log', __FILE__)
-            elsif Dir.exists?('/var/log/pwnix')
-              File.expand_path('/var/log/pwnix/blue_hydra_rssi.log', __FILE__)
             else
               File.expand_path('../../blue_hydra_rssi.log', __FILE__)
             end
@@ -208,14 +181,11 @@ module BlueHydra
 
   # the chunk log will only get used if the appropriate config value is set
   #
-  # Logs will be written to /var/log/pwnix/blue_hydra_chunk.log on a sensor or
-  # in the local directory as blue_hydra_chunk.log if on a non-Pwnie system
+  # blue_hydra_chunk.log will be written to /var/log/blue_hydra if the path exists, or in the local directory
   CHUNK_LOGFILE = if ENV["BLUE_HYDRA"] == "test"
               File.expand_path('../../blue_hydra_chunk.log', __FILE__)
             elsif Dir.exists?('/var/log/blue_hydra')
               File.expand_path('/var/log/blue_hydra/blue_hydra_chunk.log', __FILE__)
-            elsif Dir.exists?('/var/log/pwnix')
-              File.expand_path('/var/log/pwnix/blue_hydra_chunk.log', __FILE__)
             else
               File.expand_path('../../blue_hydra_chunk.log', __FILE__)
             end
@@ -379,28 +349,12 @@ end
 # set all String properties to have a default length of 255
 DataMapper::Property::String.length(255)
 
-LEGACY_DB_PATH   = '/opt/pwnix/blue_hydra.db'
-DATA_DIR         = '/opt/pwnix/data'
-PWNIE_DB_DIR     = File.join(DATA_DIR, 'blue_hydra')
 DB_DIR           = '/etc/blue_hydra'
 DB_NAME          = 'blue_hydra.db'
-PWNIE_DB_PATH    = File.join(PWNIE_DB_DIR, DB_NAME)
 DB_PATH          = File.join(DB_DIR, DB_NAME)
 
-if Dir.exists?(DATA_DIR)
-  unless Dir.exists?(DB_DIR)
-    Dir.mkdir(DB_DIR)
-  end
-end
-
-if File.exists?(LEGACY_DB_PATH) && Dir.exists?(DB_DIR)
-  FileUtils.mv(LEGACY_DB_PATH, DB_PATH) unless File.exists?(DB_PATH)
-end
-
-
-# The database will be stored in /opt/pwnix/blue_hydra.db if we are on a system
-# which the Pwnie Express chef scripts have been run. Otherwise it will attempt
-# to create a sqlite db whereever the run was initiated.
+# The database will be stored in /etc/blue_hydra/blue_hydra.db if we are installed
+# system-wide.  Otherwise it will attempt to create a sqlite db whereever the run was initiated.
 #
 # When running the rspec tets the BLUE_HYDRA environmental value will be set to
 # 'test' and all tests should run with an in-memory db.
@@ -408,8 +362,6 @@ db_path = if ENV["BLUE_HYDRA"] == "test" || BlueHydra.no_db
             'sqlite::memory:?cache=shared'
           elsif Dir.exists?(DB_DIR)
             "sqlite:#{DB_PATH}"
-          elsif Dir.exists?(PWNIE_DB_DIR)
-            "sqlite:#{PWNIE_DB_PATH}"
           else
             "sqlite:#{DB_NAME}"
           end
@@ -422,8 +374,6 @@ def brains_to_floor
   # file and then create a new db to proceed.
   db_file = if Dir.exists?('/etc/blue_hydra/')
               "/etc/blue_hydra/blue_hydra.db"
-            elsif Dir.exists?('/opt/pwnix/data/blue_hydra/')
-              "/opt/pwnix/data/blue_hydra/blue_hydra.db"
             else
               "blue_hydra.db"
             end
