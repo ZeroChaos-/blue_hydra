@@ -311,7 +311,7 @@ module BlueHydra
       end
     end
 
-    def bluetoothdDbusError
+    def bluetoothdDbusError(bluetoothd_errors)
       BlueHydra.logger.info("Bluetoothd errors, attempting to recover...")
       bluetoothd_errors += 1
       begin
@@ -406,7 +406,7 @@ module BlueHydra
     end
 
     # helper method to reset the interface as needed
-    def hci_reset
+    def hci_reset(bluetoothd_errors)
       # interface reset
       interface_reset = BlueHydra::Command.execute3("hciconfig #{BlueHydra.config["bt_device"]} reset")[:stderr]
       if interface_reset
@@ -428,7 +428,7 @@ module BlueHydra
       if interface_powerup[:exit_code] == 124
         if interface_powerup[:stdout] =~ /Waiting to connect to bluetoothd.../i
           BlueHydra.logger.info("bluetoothctl unable to connect to bluetoothd")
-          bluetoothdDbusError
+          bluetoothdDbusError(bluetoothd_errors)
         else
           BlueHydra.logger.warn("Timeout occurred while powering on bluetooth adapter #{BlueHydra.config["bt_device"]}")
           interface_powerup[:stdout].split("\n").each do |ln|
@@ -474,7 +474,7 @@ module BlueHydra
                 until info_scan_queue.empty?
 
                   # reset interface first to get to a good base state
-                  hci_reset
+                  hci_reset(bluetoothd_errors)
 
                   BlueHydra.logger.debug("Popping off info scan queue. Depth: #{ info_scan_queue.length}")
 
@@ -496,11 +496,11 @@ module BlueHydra
                     if info_errors == "Could not create connection: Input/output error"
                       info_errors = nil
                       BlueHydra.logger.debug("Random leinfo failed against #{command[:address]}")
-                      hci_reset
+                      hci_reset(bluetoothd_errors)
                       info2_errors = BlueHydra::Command.execute3("hcitool -i #{BlueHydra.config["bt_device"]} leinfo --static #{command[:address]}",3)[:stderr]
                       if info2_errors == "Could not create connection: Input/output error"
                         BlueHydra.logger.debug("Static leinfo failed against #{command[:address]}")
-                        hci_reset
+                        hci_reset(bluetoothd_errors)
                         info3_errors = BlueHydra::Command.execute3("hcitool -i #{BlueHydra.config["bt_device"]} leinfo #{command[:address]}",3)[:stderr]
                         if info3_errors == "Could not create connection: Input/output error"
                           BlueHydra.logger.debug("Default leinfo failed against #{command[:address]}")
@@ -532,7 +532,7 @@ module BlueHydra
                 # run 1 l2ping a time while still checking if info scan queue
                 # is empty
                 unless l2ping_queue.empty?
-                  hci_reset
+                  hci_reset(bluetoothd_errors)
                   BlueHydra.logger.debug("Popping off l2ping queue. Depth: #{ l2ping_queue.length}")
                   command = l2ping_queue.pop
                   l2ping_errors = BlueHydra::Command.execute3("l2ping -c 3 -i #{BlueHydra.config["bt_device"]} #{command[:address]}",5)[:stderr]
@@ -560,7 +560,7 @@ module BlueHydra
               end
 
               # another reset before going back to discovery
-              hci_reset
+              hci_reset(bluetoothd_errors)
 
               # hot loop avoidance, but run right before discovery to avoid any delay between discovery and info scan
               sleep 1
@@ -581,7 +581,7 @@ module BlueHydra
                   #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.ServiceUnknown: The name org.bluez was not provided by any .service files
                   #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.ServiceUnknown: The name :1.[0-9]{3} was not provided by any .service files
                   #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.NameHasNoOwner: Could not get owner of name 'org.bluez': no such name
-                  bluetoothd_errors = bluetoothdDbusError
+                  bluetoothd_errors = bluetoothdDbusError(bluetoothd_errors)
                 elsif discovery_errors =~ /KeyboardInterrupt/
                   # Sometimes the interrupt gets passed to test-discovery so assume it was meant for us
                   BlueHydra.logger.info("BlueHydra Killed! Exiting... SIGINT")
