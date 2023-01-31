@@ -665,7 +665,7 @@ module BlueHydra
               ubertooth_reset = BlueHydra::Command.execute3("ubertooth-util -U #{BlueHydra.config["ubertooth_index"]} -r")
               if ubertooth_reset[:stderr]
                 BlueHydra.logger.error("Error with ubertooth-util -r...")
-                ubertooth_reset.split("\n").each do |ln|
+                ubertooth_reset[:stderr].split("\n").each do |ln|
                   BlueHydra.logger.error(ln)
                 end
               end
