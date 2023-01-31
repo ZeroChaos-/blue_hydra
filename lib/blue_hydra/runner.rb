@@ -426,11 +426,11 @@ module BlueHydra
       sleep 1
       interface_powerup = BlueHydra::Command.execute3("printf \"select #{BlueHydra::LOCAL_ADAPTER_ADDRESS.split}\npower on\n\" | timeout 5 bluetoothctl")
       if interface_powerup[:exit_code] == 124
-        if interface_powerup[:stdout] ~= /Waiting to connect to bluetoothd.../i
+        if interface_powerup[:stdout] =~ /Waiting to connect to bluetoothd.../i
           BlueHydra.logger.info("bluetoothctl unable to connect to bluetoothd")
           bluetoothdDbusError
         else
-          BlueHydra.logger.warn("Timeout occurred while powering on bluetooth adapter ${BlueHydra.config["bt_device"]}")
+          BlueHydra.logger.warn("Timeout occurred while powering on bluetooth adapter #{BlueHydra.config["bt_device"]}")
           interface_powerup[:stdout].split("\n").each do |ln|
             BlueHydra.logger.error(ln)
           end
