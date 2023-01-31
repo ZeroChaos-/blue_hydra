@@ -169,12 +169,12 @@ module BlueHydra
             else
               self.scanner_status[:ubertooth] = "hardware unresponsive"
               if !ubertooth_util_r[:stdout].nil? && ubertooth_util_r[:stdout] != ""
-                ubertooth_util_r[:stdout].each do |ln|
+                ubertooth_util_r[:stdout].split("\n").each do |ln|
                   BlueHydra.logger.debug(ln)
                 end
               end
               if !ubertooth_util_r[:stderr].nil? && ubertooth_util_r[:stderr] != ""
-                ubertooth_util_r[:stderr].each do |ln|
+                ubertooth_util_r[:stderr].split("\n").each do |ln|
                   BlueHydra.logger.debug(ln)
                 end
               end
@@ -184,12 +184,12 @@ module BlueHydra
           else
             self.scanner_status[:ubertooth] = "No hardware detected"
             if !ubertooth_util_v[:stdout].nil? && ubertooth_util_v[:stdout] != ""
-              ubertooth_util_v[:stdout].each do |ln|
+              ubertooth_util_v[:stdout].split("\n").each do |ln|
                 BlueHydra.logger.debug(ln)
               end
             end
             if !ubertooth_util_v[:stderr].nil? && ubertooth_util_v[:stderr] != ""
-              ubertooth_util_v[:stderr].each do |ln|
+              ubertooth_util_v[:stderr].split("\n").each do |ln|
                 BlueHydra.logger.debug(ln)
               end
             end
