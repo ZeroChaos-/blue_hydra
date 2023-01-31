@@ -144,7 +144,8 @@ module BlueHydra
             self.scanner_status[:ubertooth] = "Found hardware"
             BlueHydra.logger.debug("Found ubertooth hardware")
             sleep 1
-            if system("ubertooth-util -r -U #{BlueHydra.config["ubertooth_index"]} > /dev/null 2>&1")
+            ubertooth_util = BlueHydra::Command.execute3("ubertooth-util -r -U #{BlueHydra.config["ubertooth_index"]}")
+            if ubertooth_util[:exit_code] == 0
               self.scanner_status[:ubertooth] = "hardware responsive"
               BlueHydra.logger.debug("hardware is responsive")
               sleep 1
@@ -171,7 +172,17 @@ module BlueHydra
             start_ubertooth_thread if @ubertooth_command
           else
             self.scanner_status[:ubertooth] = "No hardware detected"
-            BlueHydra.logger.debug("No ubertooth hardware detected")
+            if ubertooth_util[:stdout] != ""
+              ubertooth_util[:stdout].each do |ln|
+                BlueHydra.logger.debug(ln)
+              end
+            end
+            if ubertooth_util[:stderr] != ""
+              ubertooth_util[:stderr].each do |ln|
+                BlueHydra.logger.debug(ln)
+              end
+            end
+            BlueHydra.logger.info("No ubertooth hardware detected")
           end
         end
 
