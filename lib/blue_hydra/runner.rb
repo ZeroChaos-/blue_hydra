@@ -157,6 +157,7 @@ module BlueHydra
                 ubertooth_firmware_check(ubertooth_rx_firmware[:stderr])
                 if ubertooth_rx_firmware[:exit_code] == 0
                   @ubertooth_command = "ubertooth-rx -z -t 40 -U #{BlueHydra.config["ubertooth_index"]}"
+                end
               end
               unless @ubertooth_command
                 sleep 1
