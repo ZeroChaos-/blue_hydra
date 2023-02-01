@@ -168,8 +168,10 @@ module BlueHydra
                   self.scanner_status[:ubertooth] = "ubertooth-scan"
                   @ubertooth_command = "ubertooth-scan -t 40 -U #{BlueHydra.config["ubertooth_index"]}"
                 else
-                  BlueHydra.logger.error("Unable to find ubertooth-scan or ubertooth-rx -z, ubertooth disabled.")
-                  self.scanner_status[:ubertooth] = "Unable to find ubertooth-scan or ubertooth-rx -z"
+                  if self.scanner_status[:ubertooth] != 'Disabled, firmware upgrade required'
+                    BlueHydra.logger.error("Unable to find ubertooth-scan or ubertooth-rx -z, ubertooth disabled.")
+                    self.scanner_status[:ubertooth] = "Unable to find ubertooth-scan or ubertooth-rx -z"
+                  end
                 end
               end
             else
