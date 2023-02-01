@@ -383,7 +383,6 @@ module BlueHydra
               # not controled by init, bail
               unless BlueHydra.daemon_mode
                 self.cui_thread.kill if self.cui_thread
-                puts "Bluetoothd is running but not controlled by init or functioning, please restart it manually."
               end
               BlueHydra.logger.fatal("Bluetoothd is running but not controlled by init or functioning, please restart it manually.")
               BlueHydra::Pulse.send_event('blue_hydra',
@@ -412,9 +411,6 @@ module BlueHydra
         if bluetoothd_errors > 1
           unless BlueHydra.daemon_mode
             self.cui_thread.kill if self.cui_thread
-            puts "Bluetoothd is not functioning as expected and auto-restart failed."
-            puts 'Unable to control system services, "service" and "rc-service" are both missing?' unless service
-            puts "Please restart bluetoothd and try again."
           end
           if bluetoothd_restart[:stderr]
             BlueHydra.logger.error("Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}")
