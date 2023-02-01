@@ -431,6 +431,7 @@ module BlueHydra
           exit 1
         end
       rescue Errno::ENOMEM, NoMemoryError
+        BlueHydra.logger.fatal("System couldn't allocate enough memory to run an external command.")
         BlueHydra::Pulse.send_event('blue_hydra',
                                     {
                                       key: "bluehydra_oom",
