@@ -446,7 +446,7 @@ module BlueHydra
       end
       # Bluez 5.64 seems to have a bug in reset where the device shows powered but fails as not ready
       sleep 1
-      interface_powerup = BlueHydra::Command.execute3("printf \"select #{BlueHydra::LOCAL_ADAPTER_ADDRESS.split}\npower on\n\" | timeout 5 bluetoothctl")
+      interface_powerup = BlueHydra::Command.execute3("printf \"select #{BlueHydra::LOCAL_ADAPTER_ADDRESS.split}\npower on\n\" | timeout 2 bluetoothctl")
       if interface_powerup[:exit_code] == 124
         if interface_powerup[:stdout] =~ /Waiting to connect to bluetoothd.../i
           BlueHydra.logger.info("bluetoothctl unable to connect to bluetoothd")
