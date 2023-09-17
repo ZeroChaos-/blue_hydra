@@ -13,8 +13,8 @@ Ensure that the following packages are installed:
 ```
 bluez
 bluez-test-scripts
-python-bluez
-python-dbus
+python3-bluez
+python3-dbus
 ubertooth # where applicable
 sqlite3
 libsqlite3-dev
@@ -24,7 +24,7 @@ If your chosen distro is still on bluez 4 please choose a more up to date distro
 
 On Debian-based systems, these packages can be installed with the following command line:
 
-```sudo apt-get install bluez bluez-test-scripts python-bluez python-dbus libsqlite3-dev ubertooth```
+```sudo apt-get install bluez bluez-test-scripts python3-bluez python3-dbus libsqlite3-dev ubertooth```
 
 To install the needed gems it may be helpful (but not required) to use bundler:
 
@@ -88,7 +88,7 @@ The following options can be set:
 It may also be useful to check blue_hydra --help for additional command line options.  At this time it looks like this:
 
 ```
-Usage: BlueHydra [options]
+Usage: blue_hydra [options]
     -d, --daemonize                  Suppress output and run in daemon mode
     -z, --demo                       Hide mac addresses in CLI UI
     -p, --pulse                      Send results to hermes
@@ -127,7 +127,7 @@ On Debian like systems, this can be resolved by setting locale encodings as foll
 sudo locale-gen en_US.UTF-8 
 sudo locale-gen en en_US en_US.UTF-8
 sudo dpkg-reconfigure locales
-export LC_ALL = "en_US"
+export LC_ALL="en_US.UTF-8"
 ```
 
 This issue and solution brought up by [llazzaro](https://github.com/llazzaro)

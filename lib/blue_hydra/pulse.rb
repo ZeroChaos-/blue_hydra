@@ -2,12 +2,9 @@ module BlueHydra
   module Pulse
     def send_event(key,hash)
       if BlueHydra.pulse
-        begin
-          SensorEvent.send_event(key,hash)
-        rescue
-          #for open source users who don't have send event (because they aren't sensors)
-          return false
-        end
+        # TODO: the open source version never implemented this but maybe it should
+        #for open source users who don't have send event (because they aren't sensors)
+        return false
       end
     end
 

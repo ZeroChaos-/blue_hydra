@@ -20,8 +20,9 @@ module BlueHydra::Command
 
     if timeout
       until Time.now.to_i > stop_time || thread.status == false
-        sleep 1
+        sleep 0.1
       end
+      BlueHydra.logger.debug("Timeout on command: #{command}")
 
       begin
         Process.kill(timeout_signal, thread.pid) unless thread.status == false
@@ -48,6 +49,7 @@ module BlueHydra::Command
 
     output
     rescue Errno::ENOMEM, NoMemoryError
+      BlueHydra.logger.fatal("System couldn't allocate enough memory to run an external command.")
       BlueHydra::Pulse.send_event('blue_hydra',
       {
         key: "bluehydra_oom",

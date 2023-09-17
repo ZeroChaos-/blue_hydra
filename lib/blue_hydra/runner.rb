@@ -140,38 +140,68 @@ module BlueHydra
           sleep 1
           # Handle ubertooth
           self.scanner_status[:ubertooth] = "Detecting"
-          if system("ubertooth-util -v > /dev/null 2>&1")
+          ubertooth_util_v = BlueHydra::Command.execute3("ubertooth-util -v -U #{BlueHydra.config["ubertooth_index"]}")
+          if ubertooth_util_v[:exit_code] == 0
             self.scanner_status[:ubertooth] = "Found hardware"
             BlueHydra.logger.debug("Found ubertooth hardware")
             sleep 1
-            if system("ubertooth-util -r > /dev/null 2>&1")
+            ubertooth_util_r = BlueHydra::Command.execute3("ubertooth-util -r -U #{BlueHydra.config["ubertooth_index"]}")
+            if ubertooth_util_r[:exit_code] == 0
               self.scanner_status[:ubertooth] = "hardware responsive"
               BlueHydra.logger.debug("hardware is responsive")
               sleep 1
               if system("ubertooth-rx -h 2>&1 | grep -q Survey")
-                @ubertooth_command = "ubertooth-rx -z -t 40"
                 BlueHydra.logger.debug("Found working ubertooth-rx -z")
                 self.scanner_status[:ubertooth] = "ubertooth-rx"
+                ubertooth_rx_firmware = BlueHydra::Command.execute3("ubertooth-rx -z -t 1 -U #{BlueHydra.config["ubertooth_index"]}")
+                ubertooth_firmware_check(ubertooth_rx_firmware[:stderr])
+                if ubertooth_rx_firmware[:exit_code] == 0
+                  @ubertooth_command = "ubertooth-rx -z -t 40 -U #{BlueHydra.config["ubertooth_index"]}"
+                end
               end
               unless @ubertooth_command
                 sleep 1
-                if system("ubertooth-scan -t 1 > /dev/null 2>&1")
-                  @ubertooth_command = "ubertooth-scan -t 40"
+                ubertooth_scan_firmware = BlueHydra::Command.execute3("ubertooth-scan -t 1 -U #{BlueHydra.config["ubertooth_index"]}")
+                ubertooth_firmware_check(ubertooth_scan_firmware[:stderr])
+                if ubertooth_scan_firmware[:exit_code] == 0
                   BlueHydra.logger.debug("Found working ubertooth-scan")
                   self.scanner_status[:ubertooth] = "ubertooth-scan"
+                  @ubertooth_command = "ubertooth-scan -t 40 -U #{BlueHydra.config["ubertooth_index"]}"
                 else
-                  BlueHydra.logger.error("Unable to find ubertooth-scan or ubertooth-rx -z, ubertooth disabled.")
-                  self.scanner_status[:ubertooth] = "Unable to find ubertooth-scan or ubertooth-rx -z"
+                  if self.scanner_status[:ubertooth] != 'Disabled, firmware upgrade required'
+                    BlueHydra.logger.error("Unable to find ubertooth-scan or ubertooth-rx -z, ubertooth disabled.")
+                    self.scanner_status[:ubertooth] = "Unable to find ubertooth-scan or ubertooth-rx -z"
+                  end
                 end
               end
             else
               self.scanner_status[:ubertooth] = "hardware unresponsive"
+              if !ubertooth_util_r[:stdout].nil? && ubertooth_util_r[:stdout] != ""
+                ubertooth_util_r[:stdout].split("\n").each do |ln|
+                  BlueHydra.logger.debug(ln)
+                end
+              end
+              if !ubertooth_util_r[:stderr].nil? && ubertooth_util_r[:stderr] != ""
+                ubertooth_util_r[:stderr].split("\n").each do |ln|
+                  BlueHydra.logger.debug(ln)
+                end
+              end
               BlueHydra.logger.error("hardware is present but ubertooth-util -r fails")
             end
             start_ubertooth_thread if @ubertooth_command
           else
             self.scanner_status[:ubertooth] = "No hardware detected"
-            BlueHydra.logger.debug("No ubertooth hardware detected")
+            if !ubertooth_util_v[:stdout].nil? && ubertooth_util_v[:stdout] != ""
+              ubertooth_util_v[:stdout].split("\n").each do |ln|
+                BlueHydra.logger.debug(ln)
+              end
+            end
+            if !ubertooth_util_v[:stderr].nil? && ubertooth_util_v[:stderr] != ""
+              ubertooth_util_v[:stderr].split("\n").each do |ln|
+                BlueHydra.logger.debug(ln)
+              end
+            end
+            BlueHydra.logger.info("No ubertooth hardware detected")
           end
         end
 
@@ -311,8 +341,111 @@ module BlueHydra
       end
     end
 
+    def ubertooth_firmware_check(ubertooth_stderr)
+      if ubertooth_stderr =~ /Please upgrade to latest released firmware/
+        self.scanner_status[:ubertooth] = 'Disabled, firmware upgrade required'
+        BlueHydra.logger.error("Ubertooth disabled, firmware upgrade required to match host software")
+        ubertooth_stderr.split("\n").each do |ln|
+          BlueHydra.logger.error(ln)
+        end
+        return false
+      end
+      return true
+    end
+
+    def bluetoothdDbusError(bluetoothd_errors)
+      BlueHydra.logger.info("Bluetoothd errors, attempting to recover...")
+      bluetoothd_errors += 1
+      begin
+        if bluetoothd_errors == 1
+          if ::File.executable?(`which rc-service 2> /dev/null`.chomp)
+            service = "rc-service"
+          elsif ::File.executable?(`which service 2> /dev/null`.chomp)
+            service = "service"
+          else
+            service = false
+          end
+
+          # Is bluetoothd running?
+          bluetoothd_pid = `pgrep bluetoothd`.chomp
+          unless bluetoothd_pid == ""
+            # Does init own bluetoothd?
+            if `ps -o ppid= #{bluetoothd_pid}`.chomp =~ /\s1/
+              if service
+                BlueHydra.logger.info("Restarting bluetoothd...")
+                bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
+              else
+                bluetoothd_restart ||= {}
+                bluetoothd_restart[:exit_code] == 127
+              end
+              sleep 3
+            else
+              # not controled by init, bail
+              unless BlueHydra.daemon_mode
+                self.cui_thread.kill if self.cui_thread
+              end
+              BlueHydra.logger.fatal("Bluetoothd is running but not controlled by init or functioning, please restart it manually.")
+              BlueHydra::Pulse.send_event('blue_hydra',
+                                          {key:'blue_hydra_bluetoothd_error',
+                                           title:'Blue Hydra Encounterd Unrecoverable bluetoothd Error',
+                                           message:"bluetoothd is running but not controlled by init or functioning",
+                                           severity:'FATAL'
+                                          })
+              exit 1
+            end
+          else
+            # bluetoothd isn't running at all, attempt to restart through init
+            if service
+              BlueHydra.logger.info("Starting bluetoothd...")
+              bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
+            else
+              bluetoothd_restart ||= {}
+              bluetoothd_restart[:exit_code] == 127
+            end
+            sleep 3
+          end
+          unless bluetoothd_restart[:exit_code] == 0
+            bluetoothd_errors += 1
+          end
+        end
+        if bluetoothd_errors > 1
+          unless BlueHydra.daemon_mode
+            self.cui_thread.kill if self.cui_thread
+          end
+          if bluetoothd_restart[:stderr]
+            BlueHydra.logger.error("Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}")
+            BlueHydra::Pulse.send_event('blue_hydra',
+                                        {key:'blue_hydra_bluetoothd_restart_failed',
+                                         title:'Blue Hydra Failed To Restart bluetoothd',
+                                         message:"Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}",
+                                         severity:'ERROR'
+                                        })
+          end
+          BlueHydra.logger.fatal("Bluetoothd is not functioning as expected and we failed to automatically recover.")
+          BlueHydra::Pulse.send_event('blue_hydra',
+                                      {key:'blue_hydra_bluetoothd_jank',
+                                       title:'Blue Hydra Unable To Recover From Bluetoothd Error',
+                                       message:"Bluetoothd is not functioning as expected and we failed to automatically recover.",
+                                       severity:'FATAL'
+                                      })
+          exit 1
+        end
+      rescue Errno::ENOMEM, NoMemoryError
+        BlueHydra.logger.fatal("System couldn't allocate enough memory to run an external command.")
+        BlueHydra::Pulse.send_event('blue_hydra',
+                                    {
+                                      key: "bluehydra_oom",
+                                      title: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
+                                      message: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
+                                      severity: "FATAL"
+                                    })
+        exit 1
+      end
+      return bluetoothd_errors
+    end
+
     # helper method to reset the interface as needed
-    def hci_reset
+    def hci_reset(bluetoothd_errors)
       # interface reset
       interface_reset = BlueHydra::Command.execute3("hciconfig #{BlueHydra.config["bt_device"]} reset")[:stderr]
       if interface_reset
@@ -328,6 +461,27 @@ module BlueHydra
           end
         end
       end
+      # Bluez 5.64 seems to have a bug in reset where the device shows powered but fails as not ready
+      sleep 1
+      interface_powerup = BlueHydra::Command.execute3("printf \"select #{BlueHydra::LOCAL_ADAPTER_ADDRESS.split}\npower on\n\" | timeout 2 bluetoothctl")
+      if interface_powerup[:exit_code] == 124
+        if interface_powerup[:stdout] =~ /Waiting to connect to bluetoothd.../i
+          BlueHydra.logger.info("bluetoothctl unable to connect to bluetoothd")
+          bluetoothdDbusError(bluetoothd_errors)
+        else
+          BlueHydra.logger.warn("Timeout occurred while powering on bluetooth adapter #{BlueHydra.config["bt_device"]}")
+          interface_powerup[:stdout].split("\n").each do |ln|
+            BlueHydra.logger.error(ln)
+          end
+        end
+      end
+      if interface_powerup[:stderr]
+        BlueHydra.logger.error("Error with bluetoothctl power on...")
+        interface_powerup[:stderr].split("\n").each do |ln|
+          BlueHydra.logger.error(ln)
+        end
+      end
+      sleep 1
     end
 
     # thread responsible for sending interesting commands to the hci device so
@@ -359,7 +513,7 @@ module BlueHydra
                 until info_scan_queue.empty?
 
                   # reset interface first to get to a good base state
-                  hci_reset
+                  hci_reset(bluetoothd_errors)
 
                   BlueHydra.logger.debug("Popping off info scan queue. Depth: #{ info_scan_queue.length}")
 
@@ -381,11 +535,11 @@ module BlueHydra
                     if info_errors == "Could not create connection: Input/output error"
                       info_errors = nil
                       BlueHydra.logger.debug("Random leinfo failed against #{command[:address]}")
-                      hci_reset
+                      hci_reset(bluetoothd_errors)
                       info2_errors = BlueHydra::Command.execute3("hcitool -i #{BlueHydra.config["bt_device"]} leinfo --static #{command[:address]}",3)[:stderr]
                       if info2_errors == "Could not create connection: Input/output error"
                         BlueHydra.logger.debug("Static leinfo failed against #{command[:address]}")
-                        hci_reset
+                        hci_reset(bluetoothd_errors)
                         info3_errors = BlueHydra::Command.execute3("hcitool -i #{BlueHydra.config["bt_device"]} leinfo #{command[:address]}",3)[:stderr]
                         if info3_errors == "Could not create connection: Input/output error"
                           BlueHydra.logger.debug("Default leinfo failed against #{command[:address]}")
@@ -417,7 +571,7 @@ module BlueHydra
                 # run 1 l2ping a time while still checking if info scan queue
                 # is empty
                 unless l2ping_queue.empty?
-                  hci_reset
+                  hci_reset(bluetoothd_errors)
                   BlueHydra.logger.debug("Popping off l2ping queue. Depth: #{ l2ping_queue.length}")
                   command = l2ping_queue.pop
                   l2ping_errors = BlueHydra::Command.execute3("l2ping -c 3 -i #{BlueHydra.config["bt_device"]} #{command[:address]}",5)[:stderr]
@@ -445,7 +599,7 @@ module BlueHydra
               end
 
               # another reset before going back to discovery
-              hci_reset
+              hci_reset(bluetoothd_errors)
 
               # hot loop avoidance, but run right before discovery to avoid any delay between discovery and info scan
               sleep 1
@@ -465,7 +619,8 @@ module BlueHydra
                   # gentoo (not systemd)
                   #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.ServiceUnknown: The name org.bluez was not provided by any .service files
                   #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.ServiceUnknown: The name :1.[0-9]{3} was not provided by any .service files
-                  raise BluetoothdDbusError
+                  #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.NameHasNoOwner: Could not get owner of name 'org.bluez': no such name
+                  bluetoothd_errors = bluetoothdDbusError(bluetoothd_errors)
                 elsif discovery_errors =~ /KeyboardInterrupt/
                   # Sometimes the interrupt gets passed to test-discovery so assume it was meant for us
                   BlueHydra.logger.info("BlueHydra Killed! Exiting... SIGINT")
@@ -479,97 +634,7 @@ module BlueHydra
               end
 
               bluez_errors = 0
-              bluetoothd_errors = 0
 
-            rescue BluetoothdDbusError
-              BlueHydra.logger.info("Bluetoothd errors, attempting to recover...")
-              bluetoothd_errors += 1
-              begin
-              if bluetoothd_errors == 1
-                if ::File.executable?(`which service 2> /dev/null`.chomp)
-                  service = "service"
-                elsif ::File.executable?(`which rc-service 2> /dev/null`.chomp)
-                  service = "rc-service"
-                else
-                  service = false
-                end
-
-                # Is bluetoothd running?
-                bluetoothd_pid = `pgrep bluetoothd`.chomp
-                unless bluetoothd_pid == ""
-                  # Does init own bluetoothd?
-                  if `ps -o ppid= #{bluetoothd_pid}`.chomp =~ /\s1/
-                    if service
-                      bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
-                    else
-                      bluetoothd_restart ||= {}
-                      bluetoothd_restart[:exit_code] == 127
-                    end
-                    sleep 3
-                  else
-                    # not controled by init, bail
-                    unless BlueHydra.daemon_mode
-                      self.cui_thread.kill if self.cui_thread
-                      puts "Bluetoothd is running but not controlled by init or functioning, please restart it manually."
-                    end
-                    BlueHydra.logger.fatal("Bluetoothd is running but not controlled by init or functioning, please restart it manually.")
-                    BlueHydra::Pulse.send_event('blue_hydra',
-                    {key:'blue_hydra_bluetoothd_error',
-                    title:'Blue Hydra Encounterd Unrecoverable bluetoothd Error',
-                    message:"bluetoothd is running but not controlled by init or functioning",
-                    severity:'FATAL'
-                    })
-                    exit 1
-                  end
-                else
-                  # bluetoothd isn't running at all, attempt to restart through init
-                  if service
-                    bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
-                  else
-                    bluetoothd_restart ||= {}
-                    bluetoothd_restart[:exit_code] == 127
-                  end
-                  sleep 3
-                end
-                unless bluetoothd_restart[:exit_code] == 0
-                  bluetoothd_errors += 1
-                end
-              end
-              rescue Errno::ENOMEM, NoMemoryError
-                BlueHydra::Pulse.send_event('blue_hydra',
-                 {
-                  key: "bluehydra_oom",
-                  title: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
-                  message: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
-                  severity: "FATAL"
-                 })
-                exit 1
-              end
-              if bluetoothd_errors > 1
-                unless BlueHydra.daemon_mode
-                  self.cui_thread.kill if self.cui_thread
-                  puts "Bluetoothd is not functioning as expected and auto-restart failed."
-                  puts 'Unable to control system services, "service" and "rc-service" are both missing?' unless service
-                  puts "Please restart bluetoothd and try again."
-                end
-                if bluetoothd_restart[:stderr]
-                  BlueHydra.logger.error("Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}")
-                  BlueHydra::Pulse.send_event('blue_hydra',
-                  {key:'blue_hydra_bluetoothd_restart_failed',
-                  title:'Blue Hydra Failed To Restart bluetoothd',
-                  message:"Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}",
-                  severity:'ERROR'
-                  })
-                end
-                BlueHydra.logger.fatal("Bluetoothd is not functioning as expected and we failed to automatically recover.")
-                BlueHydra::Pulse.send_event('blue_hydra',
-                {key:'blue_hydra_bluetoothd_jank',
-                title:'Blue Hydra Unable To Recover From Bluetoothd Error',
-                message:"Bluetoothd is not functioning as expected and we failed to automatically recover.",
-                severity:'FATAL'
-                })
-                exit 1
-              end
             rescue BluezNotReadyError
               BlueHydra.logger.info("Bluez reports not ready, attempting to recover...")
               bluez_errors += 1
@@ -632,14 +697,13 @@ module BlueHydra
       BlueHydra.logger.info("Ubertooth thread starting")
       self.ubertooth_thread = Thread.new do
         begin
-          kill_yourself = false
           loop do
             begin
               # Do a scan with ubertooth
-              ubertooth_reset = BlueHydra::Command.execute3("ubertooth-util -r")
+              ubertooth_reset = BlueHydra::Command.execute3("ubertooth-util -U #{BlueHydra.config["ubertooth_index"]} -r")
               if ubertooth_reset[:stderr]
                 BlueHydra.logger.error("Error with ubertooth-util -r...")
-                ubertooth_reset.split("\n").each do |ln|
+                ubertooth_reset[:stderr].split("\n").each do |ln|
                   BlueHydra.logger.error(ln)
                 end
               end
@@ -647,16 +711,9 @@ module BlueHydra
               self.scanner_status[:ubertooth] = Time.now.to_i unless BlueHydra.daemon_mode
               ubertooth_output = BlueHydra::Command.execute3(@ubertooth_command,60)
               if ubertooth_output[:stderr]
-                BlueHydra.logger.error("Error with ubertooth_{scan,rx}..")
-                if ubertooth_output[:stderr] =~ /Please upgrade to latest released firmware/
-                  self.scanner_status[:ubertooth] = 'Disabled, firmware upgrade required'
-                  kill_yourself = true
-                end
+                BlueHydra.logger.error("Error with ubertooth-{scan,rx}..")
                 ubertooth_output[:stderr].split("\n").each do |ln|
                   BlueHydra.logger.error(ln)
-                end
-                if kill_yourself
-                  self.ubertooth_thread.kill
                 end
               else
                 ubertooth_output[:stdout].each_line do |line|
