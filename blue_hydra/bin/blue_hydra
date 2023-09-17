@@ -1,0 +1,214 @@
+#!/usr/bin/env ruby
+# encoding: UTF-8
+Encoding.default_external = Encoding::UTF_8
+Encoding.default_internal = Encoding::UTF_8
+$0 = "BlueHydra"
+Version = '1.9.17'
+
+# add ../lib/ to load path 
+$:.unshift(File.dirname(File.expand_path('../../lib/blue_hydra.rb',__FILE__)))
+
+# require for option parsing
+require 'optparse'
+
+# parse all command line arguments and store in options Hash for run time 
+# configurations
+options = {}
+
+OptionParser.new do |opts|
+  opts.on("-d", "--daemonize", "Suppress output and run in daemon mode") do |v|
+    options[:daemonize] = true
+  end
+  opts.on("-z", "--demo", "Hide mac addresses in CLI UI") do |v|
+    options[:demo] = true
+  end
+  opts.on("-p", "--pulse", "Send results to hermes") do |v|
+    options[:pulse] = true
+  end
+  opts.on("--pulse-debug", "Store results in a file for review") do |v|
+    options[:pulse_debug] = true
+  end
+  # This gets parsed directly and is not available as BlueHydra.db
+  opts.on("--no-db", "Keep db in ram only") do |v|
+    options[:no_db] = true
+  end
+  opts.on("--rssi-api", "Open 127.0.0.1:1124 to allow other processes to poll for seen devices and rssi") do |v|
+    options[:signal_spitter] = true
+  end
+  opts.on("--no-info", "For the purposes for fox hunting, don't info scan.  Some info may be missing, but there will be less gaps during tracking") do |v|
+    options[:no_info_scan] = true
+  end
+  opts.on("--mohawk-api", "For the purposes of making a hat to cover a mohawk, shit out the ui as json at /dev/shm/blue_hydra.json") do |v|
+    options[:file_api] = true
+  end
+  opts.on("-v", "--version", "Show version and quit") do |v|
+    puts "#{$0}: #{Version}"
+    exit
+  end
+  opts.on_tail("-h", "--help", "Show this message") do
+    puts opts
+    exit
+  end
+end.parse!
+
+unless Process.uid == 0
+  puts "BlueHydra must be run as root to function"
+  exit 1
+end
+
+
+# require the actual Blue Hydra code from lib
+require 'blue_hydra'
+
+# Daemon mode will run the service in the background with no CLI output
+if options[:daemonize]
+  BlueHydra.daemon_mode = true
+else
+  BlueHydra.daemon_mode = false
+end
+
+# Demo mode will disguise macs detected for demo purposes, only affects CLI
+# output, not what is stored in DB
+if options[:demo]
+  BlueHydra.demo_mode = true
+else
+  BlueHydra.demo_mode = false
+end
+
+# If the pulse flag is set the service will attempt to send results to
+# PwnPulse.  This defaults to false and can be ignored unless the system
+# running Blue Hydra is a Pwnie Express sensor.
+if options[:pulse]
+  BlueHydra.pulse = true
+else
+  BlueHydra.pulse = false
+end
+
+if options[:pulse_debug]
+  BlueHydra.pulse_debug = true
+else
+  BlueHydra.pulse_debug = false
+end
+
+if options[:no_db]
+  BlueHydra.no_db = true
+else
+  BlueHydra.no_db = false
+end
+
+if options[:signal_spitter] || BlueHydra.config["signal_spitter"]
+  BlueHydra.signal_spitter = true
+  require 'timeout' #easier to do this here than anywhere else
+  # we also need json and socket but those are unconditional requirements of pulse (which should be conditional)
+else
+  BlueHydra.signal_spitter = false
+end
+
+if options[:no_info_scan]
+  BlueHydra.info_scan = false
+else
+  BlueHydra.info_scan = true
+end
+
+if options[:file_api]
+  BlueHydra.file_api = true
+else
+  BlueHydra.file_api = false
+end
+
+# This file is used by the service scan to kill the process and should be
+# cleaned up when this crashes or is killed via the service scan. 
+PID_FILE = '/var/run/blue_hydra.pid'
+File.write(PID_FILE, Process.pid)
+
+# this flag gets used to safely trap interrupts from the keyboard and 
+# gracefully stop the running process without violently killing and potentially
+# losing data
+done = false
+trap('SIGINT') do
+  done = true
+end
+
+got_sighup = false
+trap('SIGHUP') do
+  got_sighup = true
+end
+
+begin
+  BlueHydra.logger.info("BlueHydra Starting...")
+  # Start the main workers...
+  runner = BlueHydra::Runner.new
+  runner.start
+
+  # This blocking loop keeps the scanner alive in its threads. Refer to the
+  # BlueHydra::Runner to understand the main work threads.
+  loop do 
+
+    if done
+      BlueHydra.logger.info("BlueHydra Killed! Exiting... SIGINT")
+      exit_status = 0
+      break
+    end
+
+    if got_sighup
+      BlueHydra.initialize_logger
+      BlueHydra.update_logger
+      got_sighup = false
+    end
+
+    # check the status of the runner and make sure all threads are alive
+    status = runner.status
+
+    unless status[:stopping]
+      threads = [
+        :btmon_thread,
+        :chunker_thread,
+        :parser_thread,
+        :result_thread
+      ]
+
+      unless BlueHydra.config["file"]
+        threads << :discovery_thread
+      end
+
+      if BlueHydra.signal_spitter
+        threads << :signal_spitter_thread
+        threads << :empty_spittoon_thread
+      end
+
+      threads.each do |thread_key|
+        if status[thread_key] == nil || status[thread_key] == false
+          raise FailedThreadError, thread_key
+        end
+      end
+    else
+      done = true
+    end
+    sleep 1 unless done
+  end
+
+# raised above in threads check when one of the threads has died for some 
+# reason
+rescue FailedThreadError => e
+  BlueHydra.logger.error("Thread failure: #{e.message}")
+  exit_status = 1
+
+# this traps unexpected or non specified errors 
+rescue => e
+  BlueHydra.logger.error("Generic Error: #{e.to_s}") 
+  e.backtrace.each do |line|
+    BlueHydra.logger.error(line) 
+  end
+  exit_status = 1
+
+# we need to stop the runner and clean up the PIDFILE
+#
+# stopping the runner should allow the processing Queue to drain and may take a 
+# moment depending on how many devices are being seen. 
+ensure
+  runner.stop
+  File.unlink(PID_FILE)
+  BlueHydra.logger.info("GOODBYE! ^_^")
+  exit_status ||= 7
+  exit exit_status
+end

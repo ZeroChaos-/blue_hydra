@@ -1,0 +1,15 @@
+[Unit]
+Description=BlueHydra
+After=bluetooth.target
+Requires=bluetooth.service
+
+[Service]
+WorkingDirectory=/usr/lib64/blue_hydra
+#Environment="BUNDLE_GEMFILE=/usr/lib64/blue_hydra/Gemfile"
+#ExecStart=/usr/bin/bundle exec ruby /usr/lib64/blue_hydra/bin/blue_hydra --daemon --mohawk-api
+ExecStart=/usr/lib64/blue_hydra/bin/blue_hydra --daemon --mohawk-api
+Restart=on-failure
+RestartSec=60s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+# /etc/conf.d/blue_hydra - configuration file for /etc/init.d/blue_hydra
+
+# Options to pass to blue_hydra, see `blue_hydra --help`
+# --daemonize is passed unconditionally
+BLUE_HYDRA_OPTIONS=""

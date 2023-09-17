@@ -1,0 +1,49 @@
+#!/usr/bin/python3
+
+from __future__ import absolute_import
+
+from optparse import OptionParser, make_option
+import dbus
+import dbus.mainloop.glib
+import sys
+# gentoo
+sys.path.append('/usr/lib64/bluez/test')
+# gentoo - arm
+sys.path.append('/usr/lib/bluez/test')
+# kali2
+sys.path.append('/usr/share/doc/bluez-test-scripts/examples')
+# ubuntu
+sys.path.append('/usr/share/doc/bluez-tests/examples')
+import bluezutils
+import time
+
+
+def property_changed(name, value):
+	if (name == "Discovering" and not value):
+		sys.exit(0)
+
+
+if __name__ == '__main__':
+	dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+
+	bus = dbus.SystemBus()
+
+	option_list = [
+			make_option("-i", "--device", action="store",
+					type="string", dest="dev_id"),
+			make_option("-t", "--timeout", action="store",
+					type="int", dest="timeout"),
+			]
+	parser = OptionParser(option_list=option_list)
+
+	(options, args) = parser.parse_args()
+
+	adapter = bluezutils.find_adapter(options.dev_id)
+
+	bus.add_signal_receiver(property_changed,
+					dbus_interface = "org.bluez.Adapter1",
+					signal_name = "PropertyChanged")
+
+	adapter.StartDiscovery()
+	time.sleep(options.timeout)
+	adapter.StopDiscovery()
