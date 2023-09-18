@@ -351,7 +351,9 @@ DataMapper::Property::String.length(255)
 
 RAMDISK_DB_DIR   = '/mnt/blue_hydra'
 DB_DIR           = '/etc/blue_hydra'
-DB_NAME          = 'blue_hydra.db'
+# DB_NAME          = 'blue_hydra.db'
+# Update the DB_NAME based on the provided tag (or use a default name)
+DB_NAME = tag ? "blue_hydra_#{tag}.db" : "blue_hydra.db"
 RAMDISK_DB_PATH  = File.join(RAMDISK_DB_DIR, DB_NAME)
 DB_PATH          = File.join(DB_DIR, DB_NAME)
 
