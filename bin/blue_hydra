@@ -41,6 +41,9 @@ OptionParser.new do |opts|
   opts.on("--mohawk-api", "For the purposes of making a hat to cover a mohawk, shit out the ui as json at /dev/shm/blue_hydra.json") do |v|
     options[:file_api] = true
   end
+  opts.on("-t", "--tag TAG", "Specify a tag for the database name") do |t|
+    tag = t
+  end
   opts.on("-v", "--version", "Show version and quit") do |v|
     puts "#{$0}: #{Version}"
     exit
