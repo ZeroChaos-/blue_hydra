@@ -41,7 +41,7 @@ module BlueHydra
         @@command = "cat #{BlueHydra.config["file"]}"
       end
     else
-      @@command = "btmon -T -i #{BlueHydra.config["bt_device"]}"
+      @@command = "$(locale) btmon -T -i #{BlueHydra.config["bt_device"]}"
     end
 
     # Start the runner after being initialized
