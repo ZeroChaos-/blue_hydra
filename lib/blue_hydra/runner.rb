@@ -41,7 +41,8 @@ module BlueHydra
         @@command = "cat #{BlueHydra.config["file"]}"
       end
     else
-      @@command = "btmon -T -i #{BlueHydra.config["bt_device"]}"
+      # Why is --columns here? Because Bluez 5.72 crashes without it
+      @@command = "btmon --columns 170 -T -i #{BlueHydra.config["bt_device"]}"
     end
 
     # Start the runner after being initialized
