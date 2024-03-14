@@ -60,7 +60,7 @@ module BlueHydra
 
             # log used btmon output for review if we are in debug mode
             if BlueHydra.config["btmon_rawlog"] && !BlueHydra.config["file"]
-              @rawlog_writer.puts(line.chomp)
+              @rawlog_writer.puts(line.force_encoding("utf-8").chomp)
             end
 
             # strip out color codes
@@ -78,7 +78,7 @@ module BlueHydra
 
             begin
               known_colors.each do |c|
-                line = line.gsub(c, "")
+                line = line.force_encoding("utf-8").gsub(c, "")
               end
             rescue ArgumentError
               BlueHydra.logger.warn("Non UTF-8 encoding in line: #{line.chomp}")
@@ -170,7 +170,7 @@ module BlueHydra
       # log used btmon output for review
       if BlueHydra.config["btmon_log"] && !BlueHydra.config["file"] && !BlueHydra.config["btmon_rawlog"]
         buffer.each do |line|
-          @log_writer.puts(line.chomp)
+          @log_writer.puts(line.force_encoding("utf-8").chomp)
         end
       end
 
