@@ -59,8 +59,13 @@ module BlueHydra
           stdout.each do |line|
 
             # log used btmon output for review if we are in debug mode
-            if BlueHydra.config["btmon_rawlog"] && !BlueHydra.config["file"]
-              @rawlog_writer.puts(line.chomp)
+            begin
+              if BlueHydra.config["btmon_rawlog"] && !BlueHydra.config["file"]
+                @rawlog_writer.puts(line.chomp)
+              end
+            rescue ArgumentError
+              BlueHydra.logger.warn("Non UTF-8 encoding in line: #{line.chomp}")
+              next
             end
 
             # strip out color codes
