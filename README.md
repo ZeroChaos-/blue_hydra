@@ -105,6 +105,8 @@ Usage: blue_hydra [options]
 All data is logged to an sqlite database (unless --no-db) is passed at the command line.  The database `blue_hydra.db` is located in the blue_hydra
 directory, unless /etc/blue_hydra exists, and then it is placed in /etc/blue_hydra. On Pwnie Express sensors, it will be in /opt/pwnix/data.
 
+The database will automatically be cleaned of older devices to ensure performance.  If you want to keep information about devices which haven't been seen in more than a week it is your responsibility to offload data using one of the available options (`--pulse`, `--pulse-debug`) or manually back up the database once a week.
+
 An example for a script wrapping blue_hydra and creating a csv output after run is available here:
 https://github.com/pwnieexpress/pwn_pad_sources/blob/develop/scripts/blue_hydra.sh
 This script will simply take a timestamp before blue_hydra starts, and then again after it exits, then grab a few interesting values from the db and output in csv format.
