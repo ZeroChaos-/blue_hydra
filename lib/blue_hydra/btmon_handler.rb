@@ -19,7 +19,7 @@ module BlueHydra
 
       # # log used btmon output for review if requested
       if BlueHydra.config["btmon_log"]
-        @log_file = if Dir.exists? ('/var/log/blue_hydra')
+        @log_file = if Dir.exist? ('/var/log/blue_hydra')
                         File.open("/var/log/blue_hydra/btmon_#{Time.now.to_i}.log.gz",'w+')
                       else
                         File.open("btmon_#{Time.now.to_i}.log.gz",'w+')
@@ -28,7 +28,7 @@ module BlueHydra
       end
       # # log raw btmon output for review if requested
       if BlueHydra.config["btmon_rawlog"]
-        @rawlog_file = if Dir.exists?('/var/log/blue_hydra')
+        @rawlog_file = if Dir.exist?('/var/log/blue_hydra')
                          File.open("/var/log/blue_hydra/btmon_raw_#{Time.now.to_i}.log.gz",'w+')
                        else
                          File.open("btmon_raw_#{Time.now.to_i}.log.gz",'w+')

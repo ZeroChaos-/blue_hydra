@@ -39,7 +39,7 @@ module BlueHydra
   # or in the local directory if run from a git checkout.
   CONFIG_FILE = if ENV["BLUE_HYDRA"] == "test"
               File.expand_path('../../blue_hydra.yml', __FILE__)
-            elsif Dir.exists?('/etc/blue_hydra')
+            elsif Dir.exist?('/etc/blue_hydra')
               '/etc/blue_hydra/blue_hydra.yml'
             else
               File.expand_path('../../blue_hydra.yml', __FILE__)
@@ -69,7 +69,7 @@ module BlueHydra
   }
 
   # Create config file with defaults if missing or load and update.
-  @@config = if File.exists?(CONFIG_FILE)
+  @@config = if File.exist?(CONFIG_FILE)
                new_config = YAML.load(File.read(CONFIG_FILE))
                #error checking
                # throw something in here to detect non-nil but bad values. such as using .is_a?(Array) for things
@@ -108,7 +108,7 @@ module BlueHydra
   # blue_hydra.log will be written to /var/log/blue_hydra if the path exists, or in the local directory
   LOGFILE = if ENV["BLUE_HYDRA"] == "test"
               File.expand_path('../../blue_hydra.log', __FILE__)
-            elsif Dir.exists?('/var/log/blue_hydra')
+            elsif Dir.exist?('/var/log/blue_hydra')
               File.expand_path('/var/log/blue_hydra/blue_hydra.log', __FILE__)
             else
               File.expand_path('../../blue_hydra.log', __FILE__)
@@ -162,7 +162,7 @@ module BlueHydra
   # blue_hydra_rssi.log will be written to /var/log/blue_hydra if the path exists, or in the local directory
   RSSI_LOGFILE = if ENV["BLUE_HYDRA"] == "test"
               File.expand_path('../../blue_hydra_rssi.log', __FILE__)
-            elsif Dir.exists?('/var/log/blue_hydra')
+            elsif Dir.exist?('/var/log/blue_hydra')
               File.expand_path('/var/log/blue_hydra/blue_hydra_rssi.log', __FILE__)
             else
               File.expand_path('../../blue_hydra_rssi.log', __FILE__)
@@ -184,7 +184,7 @@ module BlueHydra
   # blue_hydra_chunk.log will be written to /var/log/blue_hydra if the path exists, or in the local directory
   CHUNK_LOGFILE = if ENV["BLUE_HYDRA"] == "test"
               File.expand_path('../../blue_hydra_chunk.log', __FILE__)
-            elsif Dir.exists?('/var/log/blue_hydra')
+            elsif Dir.exist?('/var/log/blue_hydra')
               File.expand_path('/var/log/blue_hydra/blue_hydra_chunk.log', __FILE__)
             else
               File.expand_path('../../blue_hydra_chunk.log', __FILE__)
@@ -360,7 +360,7 @@ DB_PATH          = File.join(DB_DIR, DB_NAME)
 # 'test' and all tests should run with an in-memory db.
 db_path = if ENV["BLUE_HYDRA"] == "test" || BlueHydra.no_db
             'sqlite::memory:?cache=shared'
-          elsif Dir.exists?(DB_DIR)
+          elsif Dir.exist?(DB_DIR)
             "sqlite:#{DB_PATH}"
           else
             "sqlite:#{DB_NAME}"
@@ -372,7 +372,7 @@ DataMapper.setup(:default, db_path)
 def brains_to_floor
   # in the case of an invalid / blank/ corrupt DB file we will back up the old
   # file and then create a new db to proceed.
-  db_file = if Dir.exists?('/etc/blue_hydra/')
+  db_file = if Dir.exist?('/etc/blue_hydra/')
               "/etc/blue_hydra/blue_hydra.db"
             else
               "blue_hydra.db"
