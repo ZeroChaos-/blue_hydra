@@ -44,6 +44,10 @@ module BlueHydra
       # Why is --columns here? Because Bluez 5.72 crashes without it
       @@command = "btmon --columns 170 -T -i #{BlueHydra.config["bt_device"]}"
     end
+    if ! ::File.executable?(`command -v #{@@command.split[0]} 2> /dev/null`.chomp)
+      BlueHydra.logger.fatal("Failed to find: '#{@@command.split[0]}' which is needed for the current setting...")
+      exit 1
+    end
 
     # Start the runner after being initialized
     #
