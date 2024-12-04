@@ -3,7 +3,7 @@
 Encoding.default_external = Encoding::UTF_8
 Encoding.default_internal = Encoding::UTF_8
 $0 = "BlueHydra"
-Version = '1.9.20-git'
+Version = '1.9.20'
 
 # add ../lib/ to load path 
 $:.unshift(File.dirname(File.expand_path('../../lib/blue_hydra.rb',__FILE__)))
