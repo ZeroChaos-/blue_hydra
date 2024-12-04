@@ -397,6 +397,7 @@ end
 begin
   begin
     # Upgrade the db..
+    # This requires a patched data_objects to work with ruby 3.2 and higher
     DataMapper.auto_upgrade!
   rescue DataObjects::ConnectionError
     brains_to_floor
