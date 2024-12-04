@@ -401,6 +401,12 @@ begin
     DataMapper.auto_upgrade!
   rescue DataObjects::ConnectionError
     brains_to_floor
+  rescue NameError
+    BlueHydra.logger.fatal("data_objects, part of datamapper, is not compatible with your version of ruby")
+    BlueHydra.logger.fatal("A patch is availble here: https://pentoo.org/~zero/data_objects-fixnum2integer.patch")
+    puts("data_objects, part of datamapper, is not compatible with your version of ruby")
+    puts("A patch is availble here: https://pentoo.org/~zero/data_objects-fixnum2integer.patch")
+    exit 1
   end
 
   #okay, database doesn't appear corrupt at first glance, but let's try a little bit harder...
