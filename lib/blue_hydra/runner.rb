@@ -110,26 +110,22 @@ module BlueHydra
           start_empty_spittoon_thread
         end
 
-        if BlueHydra.sniffle_enabled?
-          BlueHydra.logger.info("Sniffle enabled; using Sniffle collector instead of btmon/ubertooth")
-          start_sniffle_thread
-          start_cui_thread unless BlueHydra.daemon_mode
-          start_api_thread if BlueHydra.file_api
-          return
-        end
+        start_sniffle_thread if BlueHydra.sniffle_enabled?
+
+        hci_available = !!BlueHydra::LOCAL_ADAPTER_ADDRESS
 
         # start the thread responsible for parsing the chunks into little data
         # blobs to be sorted in the db
-        start_parser_thread
+        start_parser_thread if BlueHydra.config["file"] || hci_available
 
         # start the thread responsible for breaking the filtered btmon output
         # into chunks by device, basically a pre-parser
-        start_chunker_thread
+        start_chunker_thread if BlueHydra.config["file"] || hci_available
 
         # start the thread which runs the command, typically btmon so this is
         # the btmon thread but this thread will also run the xzcat, zcat or cat
         # commands for files
-        start_btmon_thread
+        start_btmon_thread if hci_available || BlueHydra.config["file"]
 
         # helper hashes for tracking status of the scanners and also the in
         # memory copy of data for the CUI
@@ -137,7 +133,7 @@ module BlueHydra
         # another thread which operates the actual device discovery, not needed
         # if reading from a file since btmon will just be getting replayed
         unless ENV["BLUE_HYDRA"] == "test"
-          start_discovery_thread unless BlueHydra.config["file"]
+          start_discovery_thread if !BlueHydra.config["file"] && hci_available
         end
 
         # start the thread responsible for printing the CUI to screen unless
