@@ -160,16 +160,14 @@ begin
     status = runner.status
 
     unless status[:stopping]
-      threads = [
-        :btmon_thread,
-        :chunker_thread,
-        :parser_thread,
-        :result_thread
-      ]
-
-      unless BlueHydra.config["file"]
-        threads << :discovery_thread
-      end
+      threads =
+        if BlueHydra.sniffle_enabled?
+          [:sniffle_thread, :result_thread]
+        else
+          base = [:btmon_thread, :chunker_thread, :parser_thread, :result_thread]
+          base << :discovery_thread unless BlueHydra.config["file"]
+          base
+        end
 
       if BlueHydra.signal_spitter
         threads << :signal_spitter_thread
