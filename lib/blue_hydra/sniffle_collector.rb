@@ -59,7 +59,8 @@ module BlueHydra
 
     def build_command(cfg)
       script = File.expand_path("../../Sniffle/python_cli/sniff_receiver.py", __dir__)
-      cmd = ["python3", script]
+      # -u to keep stdout unbuffered so we don't stall ingestion
+      cmd = ["python3", "-u", script]
       cmd += ["-s", cfg["serport"]] if cfg["serport"]
       cmd += ["-b", cfg["baudrate"].to_s] if cfg["baudrate"]
       cmd += ["-c", cfg["advchan"].to_s] if cfg["advchan"]
