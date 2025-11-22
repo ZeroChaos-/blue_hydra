@@ -347,23 +347,25 @@ HELP
             discovery_time = "not started"
           end
 
-          # check status of ubertooth or sniffle
-          if BlueHydra.sniffle_enabled?
-            ubertooth_label = "Sniffle status"
-            last_pkt = scanner_status[:sniffle_last_packet]
-            age = last_pkt ? "#{Time.now.to_i - last_pkt}s ago" : "no packets yet"
-            ubertooth_time = "#{scanner_status[:sniffle] || 'Starting...'} (last #{age})"
-          else
-            ubertooth_label = "Ubertooth status"
-            if scanner_status[:ubertooth]
-              if scanner_status[:ubertooth].class == Integer
-                ubertooth_time = Time.now.to_i - scanner_status[:ubertooth]
-              else
-                ubertooth_time = scanner_status[:ubertooth]
-              end
+          # check status of sniffle and ubertooth independently
+          sniffle_label = "Sniffle status"
+          last_pkt = scanner_status[:sniffle_last_packet]
+          sniffle_age = last_pkt ? "#{Time.now.to_i - last_pkt}s ago" : "no packets yet"
+          sniffle_time = if BlueHydra.sniffle_enabled?
+                           "#{scanner_status[:sniffle] || 'Starting...'} (last #{sniffle_age})"
+                         else
+                           "disabled"
+                         end
+
+          ubertooth_label = "Ubertooth status"
+          if scanner_status[:ubertooth]
+            if scanner_status[:ubertooth].class == Integer
+              ubertooth_time = Time.now.to_i - scanner_status[:ubertooth]
             else
-              ubertooth_time = "Starting detection..."
+              ubertooth_time = scanner_status[:ubertooth]
             end
+          else
+            ubertooth_time = "Starting detection..."
           end
         end
 
@@ -399,7 +401,7 @@ HELP
         # about the status of the discovery and ubertooth timers from the
         # runner
         unless BlueHydra.config["file"]
-          pbuff <<  "Discovery status timer: #{discovery_time}, #{ubertooth_label}: #{ubertooth_time}, Filter mode: #{filter_mode}\n"
+          pbuff <<  "Discovery status timer: #{discovery_time}, #{sniffle_label}: #{sniffle_time}, #{ubertooth_label}: #{ubertooth_time}, Filter mode: #{filter_mode}\n"
           lines += 1
         end
 
