@@ -37,6 +37,7 @@ module BlueHydra
             @wait_thr = wait_thr
             @io = stdout
             buffer = []
+            buffer_started_at = nil
             last_activity = Time.now
 
             BlueHydra.logger.debug("Sniffle process started: #{cmd.join(' ')}")
@@ -46,6 +47,20 @@ module BlueHydra
 
               ready = IO.select([stdout], nil, nil, 1)
               unless ready
+                # timed flush in case we never saw a blank line separator
+                if buffer_started_at && (Time.now - buffer_started_at) > 2
+                  begin
+                    process_block(buffer)
+                    BlueHydra.logger.debug("Sniffle timed flush, last_packet=#{@runner.scanner_status[:sniffle_last_packet]}")
+                  rescue => e
+                    BlueHydra.logger.error("Sniffle parse error (timed flush): #{e.message}")
+                    e.backtrace.each { |ln| BlueHydra.logger.error(ln) }
+                  end
+                  buffer = []
+                  buffer_started_at = nil
+                  last_activity = Time.now
+                end
+
                 if (Time.now - last_activity) > idle_timeout
                   @runner.scanner_status[:sniffle] = "idle_restart"
                   BlueHydra.logger.warn("Sniffle idle for #{idle_timeout}s, restarting capture")
@@ -77,8 +92,10 @@ module BlueHydra
                     e.backtrace.each { |ln| BlueHydra.logger.error(ln) }
                   end
                   buffer = []
+                  buffer_started_at = nil
                 end
               else
+                buffer_started_at ||= Time.now
                 buffer << line
               end
             end
