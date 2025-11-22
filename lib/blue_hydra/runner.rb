@@ -805,6 +805,7 @@ module BlueHydra
     # helper method to push addresses intothe scan queues with a little
     # pre-processing
     def push_to_queue(mode, address)
+      local = BlueHydra::LOCAL_ADAPTER_ADDRESS
       case mode
       when :classic
         command = :info
@@ -812,13 +813,13 @@ module BlueHydra
         track_addr = address.split(":")[2,4].join(":")
 
         # do not send local adapter to be scanned y(>_<)y
-        return if track_addr == BlueHydra::LOCAL_ADAPTER_ADDRESS.split(":")[2,4].join(":")
+        return if local && track_addr == local.split(":")[2,4].join(":")
       when :le
         command = :leinfo
         track_addr = address
 
         # do not send local adapter to be scanned y(>_<)y
-        return if address == BlueHydra::LOCAL_ADAPTER_ADDRESS
+        return if local && address == local
       end
 
       # only scan if the info scan rate timeframe has elapsed
