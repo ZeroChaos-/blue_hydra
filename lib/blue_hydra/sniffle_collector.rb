@@ -26,13 +26,10 @@ module BlueHydra
 
     def run
       cfg = BlueHydra.sniffle_config
-      idle_timeout = 20
-
       loop do
         break if @stop
         cmd = build_command(cfg)
         @runner.scanner_status[:sniffle] = "starting"
-        last_packet = Time.now
 
         begin
           Open3.popen2e(*cmd) do |_stdin, stdout, wait_thr|
@@ -44,18 +41,7 @@ module BlueHydra
               break if @stop
 
               ready = IO.select([stdout], nil, nil, 1)
-              unless ready
-                if (Time.now - last_packet) > idle_timeout
-                  @runner.scanner_status[:sniffle] = "idle_restart"
-                  BlueHydra.logger.warn("Sniffle idle for #{idle_timeout}s, restarting capture")
-                  begin
-                    Process.kill("TERM", wait_thr.pid)
-                  rescue
-                  end
-                  break
-                end
-                next
-              end
+              next unless ready
 
               line = stdout.gets
               if line.nil?
@@ -67,7 +53,6 @@ module BlueHydra
               if line.strip.empty?
                 unless buffer.empty?
                   process_block(buffer)
-                  last_packet = Time.now
                   buffer = []
                 end
               else
