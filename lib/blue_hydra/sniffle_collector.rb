@@ -37,6 +37,8 @@ module BlueHydra
             @io = stdout
             buffer = []
 
+            BlueHydra.logger.debug("Sniffle process started: #{cmd.join(' ')}")
+
             loop do
               break if @stop
 
@@ -46,6 +48,7 @@ module BlueHydra
               line = stdout.gets
               if line.nil?
                 @runner.scanner_status[:sniffle] = "stopped (EOF)"
+                BlueHydra.logger.debug("Sniffle stdout EOF")
                 break
               end
 
@@ -54,6 +57,7 @@ module BlueHydra
                 unless buffer.empty?
                   begin
                     process_block(buffer)
+                    BlueHydra.logger.debug("Sniffle processed block, last_packet=#{@runner.scanner_status[:sniffle_last_packet]}")
                   rescue => e
                     BlueHydra.logger.error("Sniffle parse error: #{e.message}")
                     e.backtrace.each { |ln| BlueHydra.logger.error(ln) }
