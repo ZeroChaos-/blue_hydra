@@ -65,7 +65,21 @@ module BlueHydra
     "ui_exc_filter_prox" => [],           # exclude ui filter by prox uuid / major /minor
     "ignore_mac"         => [],           # completely ignore a mac address, both ui and db
     "signal_spitter"     => false,        # make raw signal strength api available on localhost:1124
-    "chunker_debug"      => false
+    "chunker_debug"      => false,
+    "sniffle"            => {             # settings for Sniffle submodule integration
+      "enabled"               => false,
+      "serport"               => "/dev/ttyUSB0", # update to your Sniffle tty (e.g., /dev/ttyACM0)
+      "baudrate"              => 2_000_000,      # use 921600 on older Sonoff CC2652P dongles
+      "advchan"               => 37,
+      "mode"                  => "conn_follow", # active_scan | passive_scan | conn_follow (default no -A)
+      "extadv"                => true,
+      "longrange"             => false,
+      "rssi_min"              => -90,
+      "target_mac"            => nil,
+      "target_irk"            => nil,
+      "target_string"         => nil,
+      "pcap_output"           => nil
+    }
   }
 
   # Create config file with defaults if missing or load and update.
@@ -152,6 +166,14 @@ module BlueHydra
                      else
                        Logger::INFO
                      end
+  end
+
+  def self.sniffle_config
+    @@config["sniffle"] || {}
+  end
+
+  def self.sniffle_enabled?
+    sniffle_config["enabled"]
   end
 
   initialize_logger
@@ -315,6 +337,7 @@ require 'blue_hydra/device'
 require 'blue_hydra/sync_version'
 require 'blue_hydra/cli_user_interface'
 require 'blue_hydra/cli_user_interface_tracker'
+require 'blue_hydra/sniffle_collector'
 
 # Here we enumerate the local hci adapter hardware address and make it
 # available as an internal value
@@ -329,7 +352,10 @@ end
 begin
   BlueHydra::LOCAL_ADAPTER_ADDRESS = BlueHydra::EnumLocalAddr.call.first
 rescue
-  if ENV["BLUE_HYDRA"] == "test"
+  if BlueHydra.sniffle_enabled?
+    BlueHydra.logger.warn("No local HCI adapter detected; continuing because Sniffle is enabled. Classic HCI features will be skipped.")
+    BlueHydra::LOCAL_ADAPTER_ADDRESS = nil
+  elsif ENV["BLUE_HYDRA"] == "test"
     BlueHydra::LOCAL_ADAPTER_ADDRESS = "JE:NK:IN:SJ:EN:KI"
     puts "Failed to find mac address for #{BlueHydra.config["bt_device"]}, faking for tests"
   else

@@ -1,0 +1,3 @@
+[submodule "Sniffle"]
+	path = Sniffle
+	url = https://github.com/nccgroup/Sniffle

@@ -111,6 +111,37 @@ An example for a script wrapping blue_hydra and creating a csv output after run 
 https://github.com/pwnieexpress/pwn_pad_sources/blob/develop/scripts/blue_hydra.sh
 This script will simply take a timestamp before blue_hydra starts, and then again after it exits, then grab a few interesting values from the db and output in csv format.
 
+## Sniffle Support (BLE only)
+
+BlueHydra can optionally use the bundled [Sniffle](https://github.com/nccgroup/Sniffle) submodule as a BLE capture source (BT5/4.x). When enabled, Sniffle replaces the btmon/ubertooth pipeline and feeds LE advertisements/scan responses directly into the BlueHydra UI/DB. Classic/BR-EDR data is not available in this mode, and devices will show `VERS=BTLE` (spec version isn’t inferred from advertisements).
+
+Requirements:
+
+* Sniffle-compatible hardware (e.g., TI CC26x2/CC13x2, CC1352, CC2652, Sonoff CC2652P).
+* Python 3 with pyserial (per the Sniffle README).
+
+Enable and configure in `blue_hydra.yml` (generated on first run):
+
+```
+sniffle:
+  enabled: false              # set true to use Sniffle instead of btmon/ubertooth
+  serport: "/dev/ttyUSB0"     # your Sniffle serial device (e.g., /dev/ttyACM0)
+  baudrate: 2000000           # use 921600 for older Sonoff CC2652P dongles
+  advchan: 37                 # starting primary advertising channel
+  mode: conn_follow           # conn_follow (default, no -A); or active_scan | passive_scan
+  extadv: true                # capture extended advertising
+  longrange: false            # enable only if you need coded PHY
+  rssi_min: -90
+  target_mac:
+  target_irk:
+  target_string:
+  pcap_output:
+
+Note: `active_scan` (`-A`) has been observed to stall on some firmware/boards; the default `conn_follow` avoids passing `-A`. Switch to `active_scan` if your hardware/firmware handles it reliably.
+```
+
+Run as root as usual: `sudo ./bin/blue_hydra`. The CUI will show `Sniffle status: ...` when this mode is active. If no local HCI adapter is present, BlueHydra continues with Sniffle; if an HCI is present, you can still fall back to the normal pipeline by leaving `sniffle.enabled` set to `false`.
+
 ## Helping with Development
 
 PR's should be targeted against the "develop" branch.

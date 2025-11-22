@@ -14,6 +14,8 @@ module BlueHydra
                   :ubertooth_thread,
                   :chunker_thread,
                   :parser_thread,
+                  :sniffle_collector,
+                  :sniffle_thread,
                   :signal_spitter_thread,
                   :empty_spittoon_thread,
                   :cui_status,
@@ -95,6 +97,8 @@ module BlueHydra
         self.result_queue    = Queue.new # parser thread  -> result thread
         self.info_scan_queue = Queue.new # result thread  -> discovery thread
         self.l2ping_queue    = Queue.new # result thread  -> discovery thread
+        self.scanner_status  = {}
+        self.cui_status      = {}
 
         # start the result processing thread
         start_result_thread
@@ -106,28 +110,30 @@ module BlueHydra
           start_empty_spittoon_thread
         end
 
+        start_sniffle_thread if BlueHydra.sniffle_enabled?
+
+        hci_available = !!BlueHydra::LOCAL_ADAPTER_ADDRESS
+
         # start the thread responsible for parsing the chunks into little data
         # blobs to be sorted in the db
-        start_parser_thread
+        start_parser_thread if BlueHydra.config["file"] || hci_available
 
         # start the thread responsible for breaking the filtered btmon output
         # into chunks by device, basically a pre-parser
-        start_chunker_thread
+        start_chunker_thread if BlueHydra.config["file"] || hci_available
 
         # start the thread which runs the command, typically btmon so this is
         # the btmon thread but this thread will also run the xzcat, zcat or cat
         # commands for files
-        start_btmon_thread
+        start_btmon_thread if hci_available || BlueHydra.config["file"]
 
         # helper hashes for tracking status of the scanners and also the in
         # memory copy of data for the CUI
-        self.scanner_status  = {}
-        self.cui_status      = {}
 
         # another thread which operates the actual device discovery, not needed
         # if reading from a file since btmon will just be getting replayed
         unless ENV["BLUE_HYDRA"] == "test"
-          start_discovery_thread unless BlueHydra.config["file"]
+          start_discovery_thread if !BlueHydra.config["file"] && hci_available
         end
 
         # start the thread responsible for printing the CUI to screen unless
@@ -247,30 +253,31 @@ module BlueHydra
     # is alive or to exit gracefully
     def status
       x = {
-        raw_queue:         self.raw_queue.length,
-        chunk_queue:       self.chunk_queue.length,
-        result_queue:      self.result_queue.length,
-        info_scan_queue:   self.info_scan_queue.length,
-        l2ping_queue:      self.l2ping_queue.length,
-        btmon_thread:      self.btmon_thread.status,
-        chunker_thread:    self.chunker_thread.status,
-        parser_thread:     self.parser_thread.status,
-        result_thread:     self.result_thread.status,
+        raw_queue:         (self.raw_queue&.length || 0),
+        chunk_queue:       (self.chunk_queue&.length || 0),
+        result_queue:      (self.result_queue&.length || 0),
+        info_scan_queue:   (self.info_scan_queue&.length || 0),
+        l2ping_queue:      (self.l2ping_queue&.length || 0),
+        btmon_thread:      (self.btmon_thread&.status),
+        chunker_thread:    (self.chunker_thread&.status),
+        parser_thread:     (self.parser_thread&.status),
+        result_thread:     (self.result_thread&.status),
         stopping:          @stopping
       }
 
       unless BlueHydra.config["file"]
-        x[:discovery_thread] = self.discovery_thread.status
-        x[:ubertooth_thread] = self.ubertooth_thread.status if self.ubertooth_thread
+        x[:discovery_thread] = self.discovery_thread&.status
+        x[:ubertooth_thread] = self.ubertooth_thread&.status if self.ubertooth_thread
+        x[:sniffle_thread]   = self.sniffle_thread&.status
       end
 
       if BlueHydra.signal_spitter
-        x[:signal_spitter_thread] = self.signal_spitter_thread.status
-        x[:empty_spittoon_thread] = self.empty_spittoon_thread.status
+        x[:signal_spitter_thread] = self.signal_spitter_thread&.status
+        x[:empty_spittoon_thread] = self.empty_spittoon_thread&.status
       end
 
-      x[:cui_thread] = self.cui_thread.status unless BlueHydra.daemon_mode
-      x[:api_thread] = self.api_thread.status if BlueHydra.file_api
+      x[:cui_thread] = self.cui_thread&.status unless BlueHydra.daemon_mode
+      x[:api_thread] = self.api_thread&.status if BlueHydra.file_api
 
       x
     end
@@ -282,14 +289,16 @@ module BlueHydra
       @stopping = true
       BlueHydra.logger.info("Runner stopped. Exiting after clearing queue...")
       self.btmon_thread.kill if self.btmon_thread # stop this first thread so data stops flowing ...
+      self.sniffle_collector&.stop
+      self.sniffle_thread&.kill if self.sniffle_thread
       unless BlueHydra.config["file"] #then stop doing anything if we are doing anything
         self.discovery_thread.kill if self.discovery_thread
         self.ubertooth_thread.kill if self.ubertooth_thread
       end
 
       stop_condition = Proc.new do
-        [nil, false].include?(result_thread.status) ||
-        [nil, false].include?(parser_thread.status) ||
+        result_thread.nil? || [nil, false].include?(result_thread.status) ||
+        parser_thread.nil? || [nil, false].include?(parser_thread.status) ||
         self.result_queue.empty?
       end
 
@@ -362,6 +371,16 @@ module BlueHydra
           })
         end
       end
+    end
+
+    def start_sniffle_thread
+      BlueHydra.logger.info("Sniffle collector thread starting")
+      self.sniffle_collector = BlueHydra::SniffleCollector.new(self)
+      self.sniffle_thread = sniffle_collector.start
+    rescue => e
+      BlueHydra.logger.error("Sniffle thread #{e.message}")
+      e.backtrace.each { |ln| BlueHydra.logger.error(ln) }
+      self.scanner_status[:sniffle] = "error" if self.scanner_status
     end
 
     def ubertooth_firmware_check(ubertooth_stderr)
@@ -786,6 +805,7 @@ module BlueHydra
     # helper method to push addresses intothe scan queues with a little
     # pre-processing
     def push_to_queue(mode, address)
+      local = BlueHydra::LOCAL_ADAPTER_ADDRESS
       case mode
       when :classic
         command = :info
@@ -793,13 +813,13 @@ module BlueHydra
         track_addr = address.split(":")[2,4].join(":")
 
         # do not send local adapter to be scanned y(>_<)y
-        return if track_addr == BlueHydra::LOCAL_ADAPTER_ADDRESS.split(":")[2,4].join(":")
+        return if local && track_addr == local.split(":")[2,4].join(":")
       when :le
         command = :leinfo
         track_addr = address
 
         # do not send local adapter to be scanned y(>_<)y
-        return if address == BlueHydra::LOCAL_ADAPTER_ADDRESS
+        return if local && address == local
       end
 
       # only scan if the info scan rate timeframe has elapsed
