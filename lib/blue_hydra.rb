@@ -71,7 +71,7 @@ module BlueHydra
       "serport"               => "/dev/ttyUSB0", # update to your Sniffle tty (e.g., /dev/ttyACM0)
       "baudrate"              => 2_000_000,      # use 921600 on older Sonoff CC2652P dongles
       "advchan"               => 37,
-      "mode"                  => "active_scan", # active_scan | passive_scan | conn_follow
+      "mode"                  => "conn_follow", # active_scan | passive_scan | conn_follow (default no -A)
       "extadv"                => true,
       "longrange"             => false,
       "rssi_min"              => -90,

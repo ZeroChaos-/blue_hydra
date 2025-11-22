@@ -128,7 +128,7 @@ sniffle:
   serport: "/dev/ttyUSB0"     # your Sniffle serial device (e.g., /dev/ttyACM0)
   baudrate: 2000000           # use 921600 for older Sonoff CC2652P dongles
   advchan: 37                 # starting primary advertising channel
-  mode: active_scan           # active_scan | passive_scan | conn_follow
+  mode: conn_follow           # conn_follow (default, no -A); or active_scan | passive_scan
   extadv: true                # capture extended advertising
   longrange: false            # enable only if you need coded PHY
   rssi_min: -90
@@ -136,6 +136,8 @@ sniffle:
   target_irk:
   target_string:
   pcap_output:
+
+Note: `active_scan` (`-A`) has been observed to stall on some firmware/boards; the default `conn_follow` avoids passing `-A`. Switch to `active_scan` if your hardware/firmware handles it reliably.
 ```
 
 Run as root as usual: `sudo ./bin/blue_hydra`. The CUI will show `Sniffle status: ...` when this mode is active. If no local HCI adapter is present, BlueHydra continues with Sniffle; if an HCI is present, you can still fall back to the normal pipeline by leaving `sniffle.enabled` set to `false`.

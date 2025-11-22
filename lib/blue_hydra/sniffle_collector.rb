@@ -26,6 +26,7 @@ module BlueHydra
 
     def run
       cfg = BlueHydra.sniffle_config
+      idle_timeout = 30
       loop do
         break if @stop
         cmd = build_command(cfg)
@@ -36,6 +37,7 @@ module BlueHydra
             @wait_thr = wait_thr
             @io = stdout
             buffer = []
+            last_activity = Time.now
 
             BlueHydra.logger.debug("Sniffle process started: #{cmd.join(' ')}")
 
@@ -43,7 +45,18 @@ module BlueHydra
               break if @stop
 
               ready = IO.select([stdout], nil, nil, 1)
-              next unless ready
+              unless ready
+                if (Time.now - last_activity) > idle_timeout
+                  @runner.scanner_status[:sniffle] = "idle_restart"
+                  BlueHydra.logger.warn("Sniffle idle for #{idle_timeout}s, restarting capture")
+                  begin
+                    Process.kill("TERM", wait_thr.pid)
+                  rescue
+                  end
+                  break
+                end
+                next
+              end
 
               line = stdout.gets
               if line.nil?
@@ -51,6 +64,7 @@ module BlueHydra
                 BlueHydra.logger.debug("Sniffle stdout EOF")
                 break
               end
+              last_activity = Time.now
 
               # sniff_receiver prints blank lines between packets; use that to flush
               if line.strip.empty?
