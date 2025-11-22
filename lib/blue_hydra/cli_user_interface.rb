@@ -350,7 +350,9 @@ HELP
           # check status of ubertooth or sniffle
           if BlueHydra.sniffle_enabled?
             ubertooth_label = "Sniffle status"
-            ubertooth_time = scanner_status[:sniffle] || "Starting..."
+            last_pkt = scanner_status[:sniffle_last_packet]
+            age = last_pkt ? "#{Time.now.to_i - last_pkt}s ago" : "no packets yet"
+            ubertooth_time = "#{scanner_status[:sniffle] || 'Starting...'} (last #{age})"
           else
             ubertooth_label = "Ubertooth status"
             if scanner_status[:ubertooth]

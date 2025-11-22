@@ -52,7 +52,12 @@ module BlueHydra
               # sniff_receiver prints blank lines between packets; use that to flush
               if line.strip.empty?
                 unless buffer.empty?
-                  process_block(buffer)
+                  begin
+                    process_block(buffer)
+                  rescue => e
+                    BlueHydra.logger.error("Sniffle parse error: #{e.message}")
+                    e.backtrace.each { |ln| BlueHydra.logger.error(ln) }
+                  end
                   buffer = []
                 end
               else
@@ -106,6 +111,7 @@ module BlueHydra
       return unless attrs
 
       @result_queue.push(attrs)
+      @runner.scanner_status[:sniffle_last_packet] = Time.now.to_i
 
       # update CUI status similarly to the parser thread
       begin
