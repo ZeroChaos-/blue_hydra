@@ -26,35 +26,67 @@ module BlueHydra
 
     def run
       cfg = BlueHydra.sniffle_config
-      cmd = build_command(cfg)
+      idle_timeout = 20
 
-      @runner.scanner_status[:sniffle] = "starting"
+      loop do
+        break if @stop
+        cmd = build_command(cfg)
+        @runner.scanner_status[:sniffle] = "starting"
+        last_packet = Time.now
 
-      Open3.popen2e(*cmd) do |_stdin, stdout, wait_thr|
-        @wait_thr = wait_thr
-        @io = stdout
-        buffer = []
-
-        stdout.each_line do |line|
-          break if @stop
-          # sniff_receiver prints blank lines between packets; use that to flush
-          if line.strip.empty?
-            process_block(buffer) unless buffer.empty?
+        begin
+          Open3.popen2e(*cmd) do |_stdin, stdout, wait_thr|
+            @wait_thr = wait_thr
+            @io = stdout
             buffer = []
-          else
-            buffer << line
+
+            loop do
+              break if @stop
+
+              ready = IO.select([stdout], nil, nil, 1)
+              unless ready
+                if (Time.now - last_packet) > idle_timeout
+                  @runner.scanner_status[:sniffle] = "idle_restart"
+                  BlueHydra.logger.warn("Sniffle idle for #{idle_timeout}s, restarting capture")
+                  begin
+                    Process.kill("TERM", wait_thr.pid)
+                  rescue
+                  end
+                  break
+                end
+                next
+              end
+
+              line = stdout.gets
+              if line.nil?
+                @runner.scanner_status[:sniffle] = "stopped (EOF)"
+                break
+              end
+
+              # sniff_receiver prints blank lines between packets; use that to flush
+              if line.strip.empty?
+                unless buffer.empty?
+                  process_block(buffer)
+                  last_packet = Time.now
+                  buffer = []
+                end
+              else
+                buffer << line
+              end
+            end
+
+            process_block(buffer) unless buffer.empty?
           end
+        rescue => e
+          BlueHydra.logger.error("Sniffle collector error: #{e.message}")
+          e.backtrace.each { |ln| BlueHydra.logger.error(ln) }
+          @runner.scanner_status[:sniffle] = "error"
+        ensure
+          @runner.scanner_status[:sniffle] ||= "stopped"
         end
 
-        process_block(buffer) unless buffer.empty?
+        sleep 1 unless @stop
       end
-    rescue => e
-      BlueHydra.logger.error("Sniffle collector error: #{e.message}")
-      e.backtrace.each { |ln| BlueHydra.logger.error(ln) }
-      @runner.scanner_status[:sniffle] = "error"
-    ensure
-      @runner.scanner_status[:sniffle] ||= "stopped"
-      @runner.scanner_status[:sniffle] = "stopped" if @runner.scanner_status[:sniffle] == "starting"
     end
 
     def build_command(cfg)
