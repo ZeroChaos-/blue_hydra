@@ -11,6 +11,7 @@ require 'socket'
 
 # Core Libs required by datamapper
 require 'stringio'
+# Gems required by datamapper
 require 'bigdecimal'
 # Gems
 require 'dm-migrations'

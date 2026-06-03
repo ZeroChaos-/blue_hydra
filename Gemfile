@@ -3,6 +3,7 @@ Encoding.default_internal = Encoding::UTF_8
 source 'http://rubygems.org'
 
 gem 'logger'
+gem 'bigdecimal'
 gem 'dm-migrations'
 gem 'dm-sqlite-adapter'
 gem 'dm-timestamps'
