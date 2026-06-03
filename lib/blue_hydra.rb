@@ -9,8 +9,10 @@ require 'yaml'
 require 'fileutils'
 require 'socket'
 
-# Gems
+# Core Libs required by datamapper
 require 'stringio'
+require 'bigdecimal'
+# Gems
 require 'dm-migrations'
 require 'dm-timestamps'
 require 'dm-validations'
