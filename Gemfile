@@ -4,6 +4,7 @@ source 'http://rubygems.org'
 
 gem 'logger'
 gem 'bigdecimal'
+gem 'benchmark'
 gem 'dm-migrations'
 gem 'dm-sqlite-adapter'
 gem 'dm-timestamps'
