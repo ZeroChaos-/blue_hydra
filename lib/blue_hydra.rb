@@ -10,6 +10,7 @@ require 'fileutils'
 require 'socket'
 
 # Gems
+require 'stringio'
 require 'dm-migrations'
 require 'dm-timestamps'
 require 'dm-validations'
