@@ -14,7 +14,7 @@ describe "hciconfig output parsing" do
     begin
       expect(BlueHydra::EnumLocalAddr.call.count).to eq(1)
     rescue NoMethodError => e
-      if e.message.match?(/undefined method ?scan' for nil/)
+      if e.message.match?(/undefined method .scan' for nil/)
         #during testing we allow this to pass if there is no adapter
         expect(1).to eq(1)
       else
