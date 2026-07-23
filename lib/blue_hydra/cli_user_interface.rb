@@ -154,7 +154,7 @@ HELP
       begin
       max_height = `tput lines`.chomp.to_i
       rescue Errno::ENOMEM, NoMemoryError
-        BlueHydra::Pulse.send_event('blue_hydra',
+        BlueHydra.send_event('blue_hydra',
         {
           key: "bluehydra_oom",
           title: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
@@ -313,7 +313,7 @@ HELP
         e.backtrace.each do |x|
           BlueHydra.logger.error("#{x}")
         end
-        BlueHydra::Pulse.send_event("blue_hydra",
+        BlueHydra.send_event("blue_hydra",
         {key:'blue_hydra_cui_thread_error',
         title:'Blue Hydras api Thread Encountered An Error',
         message:"#{e.message}",
@@ -612,7 +612,7 @@ HELP
         e.backtrace.each do |x|
           BlueHydra.logger.error("#{x}")
         end
-        BlueHydra::Pulse.send_event("blue_hydra",
+        BlueHydra.send_event("blue_hydra",
         {key:'blue_hydra_cui_thread_error',
         title:'Blue Hydras CUI Thread Encountered An Error',
         message:"#{e.message}",

@@ -33,3 +33,8 @@ We should look up more things which are assigned
 
 Some le uuids
 https://gitlab.com/sdalu/ruby-ble
+
+Style cleanup (cosmetic, fix later)
+* runner.rb (and other Pulse.send_event call sites) - normalize hash-key spacing: `severity:'ERROR'`/`title:'...'` (no space after colon) vs the spaced `severity: 'FATAL'` used in blue_hydra.rb and command.rb
+* command.rb - execute3 method body is not indented under its `begin` (begin, body, and rescue sit at the same indent level)
+* pulse.rb - `if BlueHydra.pulse ||  BlueHydra.pulse_debug` has a double space after `||` (in both reset and hard_reset)

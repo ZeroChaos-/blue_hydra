@@ -73,11 +73,29 @@ class BlueHydra::Device
   # after saving send up to pulse
   after  :save, :sync_to_pulse
 
+  # after saving send up to stream builder
+  after  :save, :sync_to_stream_builder
+
   # 1 week in seconds == 7 * 24 * 60 * 60 == 604800
   def self.sync_all_to_pulse(since=Time.at(Time.now.to_i - 604800))
     BlueHydra::Device.all(:updated_at.gte => since).each do |dev|
       dev.sync_to_pulse(true)
     end
+  end
+
+  # sync all recently updated devices to stream builder. Mirrors
+  # sync_all_to_pulse. Also emits a gauge metric of how many devices were
+  # synced so we have visibility into the size of each bulk sync.
+  #
+  # 1 week in seconds == 7 * 24 * 60 * 60 == 604800
+  def self.sync_all_to_stream_builder(since=Time.at(Time.now.to_i - 604800))
+    return unless BlueHydra.stream_builder || BlueHydra.stream_builder_debug
+    count = 0
+    BlueHydra::Device.all(:updated_at.gte => since).each do |dev|
+      dev.sync_to_stream_builder(true)
+      count += 1
+    end
+    BlueHydra::StreamBuilder.send_event("devices_synced_bulk", count)
   end
 
   # mark hosts as 'offline' if we haven't seen for a while
@@ -377,6 +395,58 @@ class BlueHydra::Device
       # send the json
       BlueHydra::Pulse.do_send(json_msg)
     end
+  end
+
+  # sync record to stream builder
+  #
+  # This is the Stream Builder counterpart to sync_to_pulse. It builds the same
+  # device data payload and ships it to the local Stream Builder ingestor, then
+  # emits a metric so we can track how many devices are flowing upstream.
+  def sync_to_stream_builder(sync_all=false)
+    return unless BlueHydra.stream_builder || BlueHydra.stream_builder_debug
+
+    BlueHydra::StreamBuilder.sync_device(stream_builder_data(sync_all))
+  end
+
+  # build the device data payload sent to stream builder. Mirrors the :data
+  # section of the pulse sync payload so the two stay consistent.
+  def stream_builder_data(sync_all=false)
+    data = {}
+
+    # always include uuid, address, status and sync version
+    data[:sync_id]      = self.uuid
+    data[:status]       = self.status
+    data[:sync_version] = BlueHydra::SYNC_VERSION
+
+    data[:le_proximity_uuid] = self.le_proximity_uuid if self.le_proximity_uuid
+    data[:le_major_num]      = self.le_major_num if self.le_major_num
+    data[:le_minor_num]      = self.le_minor_num if self.le_minor_num
+
+    # always include both of these if they are both set, otherwise they will
+    # be set as part of syncable_attributes below
+    if self.le_company_data && self.company
+      data[:le_company_data] = self.le_company_data
+      data[:company]         = self.company
+    end
+
+    data[:address] = self.address
+
+    @filthy_attributes ||= []
+
+    syncable_attributes.each do |attr|
+      if @filthy_attributes.include?(attr) || sync_all
+        val = self.send(attr)
+        unless [nil, "[]"].include?(val)
+          if is_serialized?(attr)
+            data[attr] = JSON.parse(val)
+          else
+            data[attr] = val
+          end
+        end
+      end
+    end
+
+    data
   end
 
   # set the :name attribute from the :short_name key only if name is not already

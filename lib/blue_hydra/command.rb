@@ -28,7 +28,7 @@ module BlueHydra::Command
         Process.kill(timeout_signal, thread.pid) unless thread.status == false
       rescue Errno::ESRCH
         BlueHydra.logger.warn("Command: #{command} exited unnaturally.")
-        BlueHydra::Pulse.send_event("blue_hydra",
+        BlueHydra.send_event("blue_hydra",
         {key:'blue_hydra_command_error',
         title:'Blue Hydra subprocess exited unnaturally',
         message:"Command: #{command} exited unnaturally.",
@@ -50,7 +50,7 @@ module BlueHydra::Command
     output
     rescue Errno::ENOMEM, NoMemoryError
       BlueHydra.logger.fatal("System couldn't allocate enough memory to run an external command.")
-      BlueHydra::Pulse.send_event('blue_hydra',
+      BlueHydra.send_event('blue_hydra',
       {
         key: "bluehydra_oom",
         title: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",

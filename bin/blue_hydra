@@ -28,6 +28,12 @@ OptionParser.new do |opts|
   opts.on("--pulse-debug", "Store results in a file for review") do |v|
     options[:pulse_debug] = true
   end
+  opts.on("--stream-builder", "Send device data to Stream Builder and metrics to CloudWatch via Greengrass") do |v|
+    options[:stream_builder] = true
+  end
+  opts.on("--stream-builder-debug", "Store Stream Builder results in a file for review") do |v|
+    options[:stream_builder_debug] = true
+  end
   # This gets parsed directly and is not available as BlueHydra.db
   opts.on("--no-db", "Keep db in ram only") do |v|
     options[:no_db] = true
@@ -88,6 +94,31 @@ if options[:pulse_debug]
   BlueHydra.pulse_debug = true
 else
   BlueHydra.pulse_debug = false
+end
+
+# If the stream-builder flag is set the service will attempt to send device
+# data to the local Stream Builder ingestor and metrics to CloudWatch via
+# Greengrass.  This defaults to false and is used when running as part of the
+# Anemoi container platform.
+if options[:stream_builder]
+  BlueHydra.stream_builder = true
+else
+  BlueHydra.stream_builder = false
+end
+
+if options[:stream_builder_debug]
+  BlueHydra.stream_builder_debug = true
+else
+  BlueHydra.stream_builder_debug = false
+end
+
+# If the optional Stream Builder files are not installed we fall back to a
+# no-op stub. Warn (but don't fail) so a user who explicitly asked for Stream
+# Builder (in either form) knows it won't actually do anything on this build.
+if (BlueHydra.stream_builder || BlueHydra.stream_builder_debug) && !BlueHydra::StreamBuilder.available?
+  msg = "Stream Builder was requested but support is not installed on this build; continuing without it"
+  BlueHydra.logger.warn(msg)
+  puts msg unless BlueHydra.daemon_mode
 end
 
 if options[:no_db]

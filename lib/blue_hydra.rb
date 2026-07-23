@@ -8,6 +8,7 @@ require 'zlib'
 require 'yaml'
 require 'fileutils'
 require 'socket'
+require 'timeout'
 
 # Core Libs required by datamapper
 require 'stringio'
@@ -273,6 +274,26 @@ module BlueHydra
     @@pulse_debug = setting
   end
 
+  # getter for stream builder option
+  def stream_builder
+    @@stream_builder ||= false
+  end
+
+  # setter for stream builder option
+  def stream_builder=(setting)
+    @@stream_builder = setting
+  end
+
+  # getter for stream builder debug option
+  def stream_builder_debug
+    @@stream_builder_debug ||= false
+  end
+
+  # setter for stream builder debug option
+  def stream_builder_debug=(setting)
+    @@stream_builder_debug = setting
+  end
+
   def no_db
     @@no_db ||= false
   end
@@ -301,17 +322,58 @@ module BlueHydra
     @@info_scan = setting
   end
 
+  # send_event is the base notification dispatcher. It fans an event out to
+  # each notification service that is enabled. Pulse receives the event as-is.
+  # Stream Builder receives it as a metric named after the event key, with the
+  # severity attached as a (low cardinality) dimension.
+  #
+  # This is the only place the two services are invoked together: Pulse and
+  # Stream Builder remain fully decoupled and never call each other.
+  def send_event(key, hash)
+    BlueHydra::Pulse.send_event(key, hash) if BlueHydra.pulse
+
+    if BlueHydra.stream_builder || BlueHydra.stream_builder_debug
+      BlueHydra::StreamBuilder.send_event(
+        key,
+        1,
+        dimensions: [{ "name" => "severity", "value" => hash[:severity].to_s }]
+      )
+    end
+  end
+
   module_function :logger, :config, :daemon_mode, :daemon_mode=, :pulse,
                   :pulse=, :rssi_logger, :demo_mode, :demo_mode=,
                   :pulse_debug, :pulse_debug=, :no_db, :no_db=,
                   :signal_spitter, :signal_spitter=, :chunk_logger,
-                  :info_scan, :info_scan=, :file_api, :file_api=
+                  :info_scan, :info_scan=, :file_api, :file_api=,
+                  :stream_builder, :stream_builder=,
+                  :stream_builder_debug, :stream_builder_debug=, :send_event
 end
 
 # require the actual code
 require 'blue_hydra/btmon_handler'
 require 'blue_hydra/parser'
 require 'blue_hydra/pulse'
+
+# Stream Builder support is an optional add-on used when Blue Hydra runs as part
+# of the Anemoi container platform. These files may not be shipped in every
+# deployment, so we require them defensively: if any are missing we fall back to
+# a no-op stub (mirroring the BlueHydra::Pulse stub) and keep running rather
+# than dumping an unhandled LoadError backtrace or failing to start.
+begin
+  require 'blue_hydra/stream_builder_client'
+  require 'blue_hydra/greengrass_ipc'
+  require 'blue_hydra/metrics_client'
+  require 'blue_hydra/stream_builder'
+rescue LoadError => e
+  # Expected on the open source build, which ships only the stub. Log quietly
+  # here (no stdout noise on every run) and fall back to the no-op stub. If a
+  # user actually requests --stream-builder without the feature installed,
+  # bin/blue_hydra warns them at that point.
+  BlueHydra.logger.debug("Stream Builder support not installed, loading no-op stub: #{e.message}")
+  require 'blue_hydra/stream_builder_stub'
+end
+
 require 'blue_hydra/chunker'
 require 'blue_hydra/runner'
 require 'blue_hydra/command'
@@ -338,7 +400,7 @@ rescue
     puts "Failed to find mac address for #{BlueHydra.config["bt_device"]}, faking for tests"
   else
     msg = "Unable to read the mac address from #{BlueHydra.config["bt_device"]}"
-    BlueHydra::Pulse.send_event("blue_hydra", {
+    BlueHydra.send_event("blue_hydra", {
       key:       'blue_hydra_bt_device_mac_read_error',
       title:     "Blue Hydra cant read mac from BT device #{BlueHydra.config["bt_device"]}",
       message:   msg,
@@ -382,7 +444,7 @@ def brains_to_floor
               "blue_hydra.db"
             end
   BlueHydra.logger.error("#{db_file} is not valid. Backing up to #{db_file}.corrupt and recreating...")
-  BlueHydra::Pulse.send_event("blue_hydra", {
+  BlueHydra.send_event("blue_hydra", {
     key:       'blue_hydra_db_corrupt',
     title:     'Blue Hydra DB Corrupt',
     message:   "#{db_file} is not valid. Backing up to #{db_file}.corrupt and recreating...",
@@ -433,7 +495,7 @@ rescue => e
     BlueHydra.logger.error(line)
     log_message << line
   end
-  BlueHydra::Pulse.send_event("blue_hydra", {
+  BlueHydra.send_event("blue_hydra", {
     key:       'blue_hydra_db_error',
     title:     'Blue Hydra Encountered DB Migration Error',
     message:   log_message,
