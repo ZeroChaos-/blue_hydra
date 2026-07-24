@@ -362,7 +362,6 @@ require 'blue_hydra/pulse'
 # than dumping an unhandled LoadError backtrace or failing to start.
 begin
   require 'blue_hydra/stream_builder_client'
-  require 'blue_hydra/greengrass_ipc'
   require 'blue_hydra/metrics_client'
   require 'blue_hydra/stream_builder'
 rescue LoadError => e
