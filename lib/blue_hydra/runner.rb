@@ -221,14 +221,14 @@ module BlueHydra
                 end
               else
                 self.scanner_status[:ubertooth] = "ubertooth-util missing"
-                Blue_Hydra.logger.info("Unable to use ubertooth without ubertooth-util installed")
+                BlueHydra.logger.info("Unable to use ubertooth without ubertooth-util installed")
               end
             else
               self.scanner_status[:ubertooth] = "No hardware detected"
             end
           else
             self.scanner_status[:ubertooth] = "Please install lsusb"
-            Blue_hydra.logger.info("Unable to detect ubertooth without lsusb installed")
+            BlueHydra.logger.info("Unable to detect ubertooth without lsusb installed")
           end
         end
 
