@@ -574,8 +574,6 @@ module BlueHydra
                         info3_errors = BlueHydra::Command.execute3("hcitool -i #{BlueHydra.config["bt_device"]} leinfo #{command[:address]}",3)[:stderr]
                         if info3_errors == "Could not create connection: Input/output error" || info_errors == "Could not create connection: I/O error"
                           BlueHydra.logger.debug("Default leinfo failed against #{command[:address]}")
-                          BlueHydra.logger.debug("Default leinfo failed against #{command[:address]}")
-                          BlueHydra.logger.debug("Default leinfo failed against #{command[:address]}")
                         end
                       end
                     end
