@@ -1076,6 +1076,23 @@ module BlueHydra
       end
     end
 
+    # Recompute the processing speed (results/sec) once the sampling window has
+    # elapsed. Dividing by the actual elapsed time (rather than a fixed value)
+    # keeps the figure accurate no matter how long the window really was.
+    #
+    # This is called both from the busy inner loop, so it refreshes mid-burst,
+    # and from the idle outer loop, so the rate falls to 0 during silence. It is
+    # a no-op until the window elapses, so calling it from both places is safe
+    # and never double counts.
+    def update_processing_speed
+      # 10 == processing speed sampling window in seconds
+      now = Time.now.to_i
+      return if (now - @processing_timer) < 10
+      self.processing_speed = @processing_tracker.to_f / (now - @processing_timer)
+      @processing_tracker   = 0
+      @processing_timer     = now
+    end
+
     def start_result_thread
       BlueHydra.logger.info("Result thread starting")
       self.result_thread = Thread.new do
@@ -1084,8 +1101,8 @@ module BlueHydra
           #debugging
           maxdepth              = 0
           self.processing_speed = 0
-          processing_tracker    = 0
-          processing_timer      = 0
+          @processing_tracker   = 0
+          @processing_timer     = Time.now.to_i
 
           last_sync = Time.now
 
@@ -1141,18 +1158,10 @@ module BlueHydra
 
               result = result_queue.pop
 
-              #this seems like the most expensive possible way to calculate speed, but I'm sure it's not
-              if Time.now.to_i >= processing_timer + 10
-                if processing_tracker == 0
-                  self.processing_speed = 0
-                else
-                  self.processing_speed = processing_tracker.to_f/10
-                end
-                processing_tracker    = 0
-                processing_timer      = Time.now.to_i
-              end
-
-              processing_tracker += 1
+              # refresh the speed mid-burst so the figure stays accurate while
+              # results are actively flowing
+              update_processing_speed
+              @processing_tracker += 1
 
               unless BlueHydra.config["file"]
                 # arbitrary low end cut off on slow processing to avoid stunning too often
@@ -1195,6 +1204,11 @@ module BlueHydra
             end
 
             self.stunned = false
+
+            # also refresh during fully idle stretches (the inner loop is
+            # skipped when the queue is empty) so the speed falls to 0 instead
+            # of freezing at the last busy value
+            update_processing_speed
 
             # only sleep if we still have nothing to do, seconds count
             sleep 1 if result_queue.empty?
