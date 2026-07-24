@@ -10,7 +10,13 @@ class BlueHydra::Device
   property :id,                            Serial
 
   # TODO: migrate this column to be called sync_id
-  property :uuid,                          String
+  # unique_index enforces sync-id uniqueness at the DB level (created by
+  # DataMapper.auto_upgrade! on startup) so we don't need a per-new-device
+  # existence query on the hot path. See #set_uuid and #save for how a (wildly
+  # unlikely) collision is handled. unique_index (rather than :unique) is used
+  # deliberately: it only adds the index, it does not add a dm-validations
+  # uniqueness check that would re-introduce a query on every save.
+  property :uuid,                          String, unique_index: true
 
   property :name,                          String
   property :status,                        String
@@ -262,16 +268,30 @@ class BlueHydra::Device
   end
 
   # set a sync id as a UUID
+  #
+  # Uniqueness is guaranteed by the unique index on the uuid column rather than
+  # a pre-insert existence query on the hot path. SecureRandom.uuid is a 122-bit
+  # random value, so a collision is astronomically unlikely; on the off chance
+  # the DB rejects the insert, #save regenerates and retries.
   def set_uuid
-    unless self.uuid
-      new_uuid = SecureRandom.uuid
+    self.uuid ||= SecureRandom.uuid
+  end
 
-      until BlueHydra::Device.all(uuid: new_uuid).count == 0
-        new_uuid = SecureRandom.uuid
-      end
-
-      self.uuid = new_uuid
-    end
+  # Persist the record, regenerating the sync id and retrying once if the DB
+  # rejects the write because of a uuid uniqueness collision.
+  #
+  # This is the "belt" to the unique index's "suspenders": the index guarantees
+  # correctness, while this rescue keeps a (practically impossible) collision
+  # from ever surfacing as an error on the processing thread. Any other
+  # integrity error is re-raised unchanged, and a second collision (which will
+  # never happen) is allowed to propagate rather than looping forever.
+  def save(*)
+    super
+  rescue DataObjects::IntegrityError => e
+    raise unless e.message =~ /uuid/i
+    BlueHydra.logger.warn("UUID collision for #{self.address}, regenerating sync id and retrying save")
+    self.uuid = SecureRandom.uuid
+    super
   end
 
 

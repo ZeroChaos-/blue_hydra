@@ -63,4 +63,38 @@ describe BlueHydra::Chunker do
 
     expect(chunker.starting_chunk?(queue2.pop.first)).to eq(true)
   end
+
+  it "injects a last_seen timestamp parsed from the btmon header" do
+    header_ts = "2015-12-10 11:31:08.667931"
+    msg1 = ["> HCI Event: Role Change (0x12) plen 8               #{header_ts}\r\n",
+            "        Status: Success (0x00)\r\n",
+            "        Address: 8C:2D:AA:7F:58:8C (Apple)\r\n"]
+    # a second starting chunk is what causes msg1's working set to be flushed
+    msg2 = ["> HCI Event: Role Change (0x12) plen 8               2015-12-10 11:32:00.123456\r\n",
+            "        Status: Success (0x00)\r\n",
+            "        Address: 8C:2D:AA:7F:58:8C (Apple)\r\n"]
+
+    incoming = Queue.new
+    outgoing = Queue.new
+    incoming.push(msg1)
+    incoming.push(msg2)
+
+    chunker = BlueHydra::Chunker.new(incoming, outgoing)
+    t = Thread.new { chunker.chunk_it_up }
+
+    begin
+      working_set = Timeout.timeout(5) { outgoing.pop }
+    ensure
+      t.kill
+    end
+
+    # the chunker appends "last_seen: <epoch>" as the final line of the message
+    last_seen_line = working_set.first.last
+    expect(last_seen_line).to match(/^last_seen: \d+$/)
+
+    # strptime must produce the same integer epoch the original Time.parse did,
+    # including the same local-time interpretation
+    expected = Time.parse(header_ts).to_i
+    expect(last_seen_line.split(': ')[1].to_i).to eq(expected)
+  end
 end

@@ -71,7 +71,19 @@ module BlueHydra
 
         # inject a timestamp onto the message parsed out of the first line of
         # btmon output
-        ts = Time.parse(current_msg.first.strip.scan(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d*$/)[0]).to_i
+        #
+        # Original used the general-purpose Time.parse, which is much slower for
+        # this fixed, known format and runs once per message on the chunker
+        # thread. Kept for reference:
+        #   ts = Time.parse(current_msg.first.strip.scan(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d*$/)[0]).to_i
+        #
+        # Time.strptime parses the known format directly. It keeps the same
+        # local-time interpretation as Time.parse (no zone in the string), and
+        # the fractional seconds are discarded by to_i just as before.
+        ts = Time.strptime(
+          current_msg.first.strip.scan(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d*$/)[0],
+          "%Y-%m-%d %H:%M:%S.%N"
+        ).to_i
         current_msg << "last_seen: #{ts}"
 
         # add the current message to the working set

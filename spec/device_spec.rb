@@ -56,6 +56,27 @@ describe BlueHydra::Device do
     expect(d.uuid =~ uuid_regex).to eq(0)
   end
 
+  it "recovers from a uuid collision by regenerating the sync id on save" do
+    first = BlueHydra::Device.new
+    first.address = "DE:AD:00:00:CC:01"
+    first.save
+    expect(first.uuid).to be_a(String)
+
+    # Force a second device to reuse the first's uuid. The DB-level unique
+    # index rejects the duplicate and #save must regenerate the sync id and
+    # retry rather than raising. (Without the unique index this duplicate would
+    # save happily and the final expectation below would fail, so this exercises
+    # both the index and the retry handling.)
+    second = BlueHydra::Device.new
+    second.address = "DE:AD:00:00:CC:02"
+    second.uuid = first.uuid
+    expect { second.save }.to_not raise_error
+    expect(second.uuid).to_not eq(first.uuid)
+    expect(second.id).to_not be_nil
+    # the regenerated uuid is what actually got persisted
+    expect(BlueHydra::Device.get(second.id).uuid).to eq(second.uuid)
+  end
+
   it "sets a uap_lap from an address" do
     address  = "D5:AD:B5:5F:CA:F5"
     device = BlueHydra::Device.new
