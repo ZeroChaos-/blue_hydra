@@ -1089,6 +1089,10 @@ module BlueHydra
 
           last_sync = Time.now
 
+          # track the last time we swept the db for timed out devices so we can
+          # throttle that sweep instead of running it on every queue drain
+          last_offline_sweep = Time.now
+
           loop do
             # 1 day in seconds == 24 * 60 * 60 == 86400
             # daily sync
@@ -1100,9 +1104,15 @@ module BlueHydra
             unless BlueHydra.config["file"]
               # if their last_seen value is > 7 minutes ago and not > 15 minutes ago
               #   l2ping them :  "l2ping -c 3 result[:address]"
-              BlueHydra::Device.all(classic_mode: true).select{|x|
-                x.last_seen < (Time.now.to_i - (60 * 7)) && x.last_seen > (Time.now.to_i - (60*15))
-              }.each do |device|
+              # constrain the last_seen window (and online status) in SQL rather
+              # than loading every classic device and filtering in Ruby on the
+              # hot path.
+              BlueHydra::Device.all(
+                classic_mode:    true,
+                status:          "online",
+                :last_seen.lt => (Time.now.to_i - (60 * 7)),
+                :last_seen.gt => (Time.now.to_i - (60 * 15))
+              ).each do |device|
                 self.query_history[device.address] ||= {}
                 if (Time.now.to_i - (60 * 7)) >= self.query_history[device.address][:l2ping].to_i
 
@@ -1174,7 +1184,15 @@ module BlueHydra
               end
             end
 
-            BlueHydra::Device.mark_old_devices_offline
+            # sweep for timed out devices periodically rather than on every
+            # queue drain. Device timeouts are measured in minutes, so a 30s
+            # sweep keeps statuses fresh while avoiding a constant full rescan
+            # of the device table on the hot path.
+            # 30 == sweep interval in seconds
+            if Time.now.to_i - 30 >= last_offline_sweep.to_i
+              BlueHydra::Device.mark_old_devices_offline
+              last_offline_sweep = Time.now
+            end
 
             self.stunned = false
 

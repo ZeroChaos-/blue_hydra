@@ -110,12 +110,11 @@ class BlueHydra::Device
       # unknown mode devices have 15 min timeout (SHOULD NOT EXIST, BUT WILL CLEAN
       # OLD DBS)
       BlueHydra::Device.all(
-        le_mode:       false,
-        classic_mode:  false,
-        status:        "online"
-      ).select{|x|
-        x.last_seen < (Time.now.to_i - (15*60))
-      }.each{|device|
+        le_mode:          false,
+        classic_mode:     false,
+        status:           "online",
+        :last_seen.lt  => (Time.now.to_i - (15*60))
+      ).each{|device|
         device.status = 'offline'
         device.save
       }
@@ -130,17 +129,21 @@ class BlueHydra::Device
     end
 
     # classic mode devices have 15 min timeout
-    BlueHydra::Device.all(classic_mode: true, status: "online").select{|x|
-      x.last_seen < (Time.now.to_i - (15*60))
-    }.each{|device|
+    BlueHydra::Device.all(
+      classic_mode:    true,
+      status:          "online",
+      :last_seen.lt => (Time.now.to_i - (15*60))
+    ).each{|device|
       device.status = 'offline'
       device.save
     }
 
     # le mode devices have 3 min timeout
-    BlueHydra::Device.all(le_mode: true, status: "online").select{|x|
-      x.last_seen < (Time.now.to_i - (60*3))
-    }.each{|device|
+    BlueHydra::Device.all(
+      le_mode:         true,
+      status:          "online",
+      :last_seen.lt => (Time.now.to_i - (60*3))
+    ).each{|device|
       device.status = 'offline'
       device.save
     }
