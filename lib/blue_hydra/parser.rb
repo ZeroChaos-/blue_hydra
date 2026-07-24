@@ -170,19 +170,23 @@ module BlueHydra
              #hack because datamapper doesn't respect varchar255 setting
              company_tmp = vals.shift.split(': ')[1]
              company_hex = company_tmp.scan(/\(([^)]+)\)/).flatten[0].to_i.to_s(16)
-             if company_tmp.length > 49 && company_tmp.scan(/\(/).count == 2
-               company_tmp = company_tmp.split('(')
-               company_tmp.delete_at(1)
-               company_tmp = company_tmp.join('(')
-               if company_tmp.length > 49
-                 BlueHydra.logger.warn("Attempted to handle long company and still too long:")
-                 BlueHydra.logger.warn("company_tmp: #{company_tmp}")
-                 BlueHydra.logger.warn("Truncating company...")
-                 company_tmp = company_tmp[0,49]
+             if company_tmp.length > 49
+               # Handle double paren companies
+               if company_tmp.scan(/\(/).count == 2
+                 company_tmp = company_tmp.split('(')
+                 company_tmp.delete_at(1)
+                 company_tmp = company_tmp.join('(')
+               end
+             end
+             # Still too long? Cut the (number) off the end
+             if company_tmp.length > 49
+               if company_tmp.scan(/\(/).count == 1
+                 company_tmp = company_tmp.split('(')
+                 company_tmp = company_tmp[0]
                end
              end
              if company_tmp.length > 49
-               BlueHydra.logger.warn("Did not attempt to handle long company and still too long:")
+               BlueHydra.logger.warn("Attempted to handle long company and still too long:")
                BlueHydra.logger.warn("company_tmp: #{company_tmp}")
                BlueHydra.logger.warn("Truncating company...")
                company_tmp = company_tmp[0,49]
