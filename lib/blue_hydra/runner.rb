@@ -563,16 +563,16 @@ module BlueHydra
 
                     # if we have errors fro le info scan attempt some
                     # additional trickery to grab the data in a few other ways
-                    if info_errors == "Could not create connection: Input/output error"
+                    if info_errors == "Could not create connection: Input/output error" || info_errors == "Could not create connection: I/O error"
                       info_errors = nil
                       BlueHydra.logger.debug("Random leinfo failed against #{command[:address]}")
                       hci_reset(bluetoothd_errors)
                       info2_errors = BlueHydra::Command.execute3("hcitool -i #{BlueHydra.config["bt_device"]} leinfo --static #{command[:address]}",3)[:stderr]
-                      if info2_errors == "Could not create connection: Input/output error"
+                      if info2_errors == "Could not create connection: Input/output error" || info_errors == "Could not create connection: I/O error"
                         BlueHydra.logger.debug("Static leinfo failed against #{command[:address]}")
                         hci_reset(bluetoothd_errors)
                         info3_errors = BlueHydra::Command.execute3("hcitool -i #{BlueHydra.config["bt_device"]} leinfo #{command[:address]}",3)[:stderr]
-                        if info3_errors == "Could not create connection: Input/output error"
+                        if info3_errors == "Could not create connection: Input/output error" || info_errors == "Could not create connection: I/O error"
                           BlueHydra.logger.debug("Default leinfo failed against #{command[:address]}")
                           BlueHydra.logger.debug("Default leinfo failed against #{command[:address]}")
                           BlueHydra.logger.debug("Default leinfo failed against #{command[:address]}")
