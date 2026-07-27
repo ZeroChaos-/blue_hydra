@@ -48,7 +48,7 @@ module BlueHydra
               key: 'bluehydra_chunk_0_address',
               title: 'BlueHydra chunked a chunk with 0 addresses.',
               message: 'BlueHydra chunked a chunk with 0 addresses',
-              severity: 'FATAL'
+              severity: 'WARN'
             })
           else
             if BlueHydra.config["chunker_debug"]
@@ -62,7 +62,7 @@ module BlueHydra
               key: 'bluehydra_chunk_2_address',
               title: 'BlueHydra chunked a chunk with more than 1 uniq address.',
               message: 'BlueHydra chunked a chunk with more than 1 uniq address.',
-              severity: 'FATAL'
+              severity: 'WARN'
             })
           end
           #always clear the working set
