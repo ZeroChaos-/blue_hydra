@@ -5,6 +5,27 @@ module BlueHydra
   # recorded bluetooth scans.
   class BtmonHandler
 
+    # optional "toolname[pid]: " prefix that newer bluez prepends ahead of the
+    # line marker (e.g. "hcitool[123]: < HCI Command..."). Stripped so prefixed
+    # and unprefixed lines dispatch the same way.
+    TOOL_PREFIX_RE = /^\w*\[\d*\]: /.freeze
+
+    # pulls the "(0xNN)" event code out of a "> HCI Event:" header, once,
+    # instead of scanning the line with a regex per drop code
+    HCI_EVENT_CODE_RE = /\(0x([0-9a-f]+)\)/.freeze
+
+    # HCI event codes dropped unconditionally (no second-line condition):
+    #   0f Command Status, 13 Number of Completed Packets
+    # bluez monitor/packet.c static const struct event_data event_table
+    HCI_DROP_CODES = ["0f", "13"].to_set.freeze
+
+    # MGMT "Device Found" (0x0012) is the only "@" line we keep; it carries an
+    # address the chunker needs. Every other local/MGMT event is noise.
+    MGMT_DEVICE_FOUND_RE = /^@ MGMT Event: .* \(0x0012\)/.freeze
+
+    # bluez monitor "= ..." notes / index bookkeeping we drop
+    NOTE_DROP_RE = /^= (bluetoothd: Unable to|New Index:|Delete Index:|Open Index:|Close Index:|Index Info:|Note:)/.freeze
+
     # initialize an instance of the class to run a command and push filtered
     # output into the parsing and processing pipeline
     #
@@ -130,46 +151,67 @@ module BlueHydra
     end
 
     # filter and then push an array of lines into the @parse_queue
+    #
+    # Most drop rules key off the leading marker of the first line (<, @, >, =)
+    # once the optional "toolname[pid]: " prefix newer bluez adds is stripped.
+    # We dispatch on that marker so a message only runs the handful of rules for
+    # its group instead of the whole list. Stripping the prefix also unifies the
+    # bare and "bluetoothd[pid]:"-prefixed variants: e.g. every "@" line except
+    # MGMT Device Found is dropped whether or not it carries a tool prefix.
+    #
+    # numbers from bluez monitor/packet.c static const struct event_data event_table
     def enqueue(buffer)
+      first_line = buffer.first
 
-      # discard anything which we sent to the modem as those lines
-      # will start with <
-      # also discard anything prefixed with @ (local events)
-      # drop command complete messages and similar messages that do not seem to be useful
-      #
-      # numbers from bluez monitor/packet.c static const struct event_data event_table
-      return if buffer.first =~ /^</ # Older bluez doesn't show the tool call
-      return if buffer.first =~ /^\w*\[\d*\]: </ # New bluez prefixes with toolname[pid]:
-      return if buffer.first =~ /^@ (?!MGMT Event: .* \(0x0012\))/
-      return if buffer.first =~ /^bluetoothd\[\d*\]: @ MGMT Open: bluetoothd/ #bluetoothd[2337376]: @ MGMT Open: bluetoothd (privileged) version 1.23
-      return if buffer.first =~ /^bluetoothd\[\d*\]: @ MGMT Command: Start Discovery \(0x0023\)/
-      return if buffer.first =~ /^> HCI Event: .* \(0x0f\)/ # "Command Status"
-      return if buffer.first =~ /^> HCI Event: .* \(0x13\)/ # "Number of Completed Packets"
-      return if buffer.first =~ /^> HCI Event: Unknown \(0x00\)/ 
-      return if buffer.first =~ /^Bluetooth monitor ver/
-      return if (buffer[0] =~ /^> HCI Event: .* \(0x0e\)/ && buffer[1] !~ /Remote/ ) # "Command Complete" this filters out local stuff
-      return if buffer.first =~ /^= bluetoothd: Unable to/
-      return if buffer.first =~ /^= New Index:/
-      return if buffer.first =~ /^= Delete Index:/
-      return if buffer.first =~ /^= Open Index:/
-      return if buffer.first =~ /^= Close Index:/
-      return if buffer.first =~ /^= Index Info:/
-      return if buffer.first =~ /^= Note:/ # Older bluez doesn't show the tool call
-      return if buffer.first =~ /^\w*\[\d*\]: = Note:/ # New bluez prefixes with toolname[pid]:
+      if first_line
+        # strip the optional "toolname[pid]: " prefix so prefixed and unprefixed
+        # lines dispatch the same way
+        marker = first_line.sub(TOOL_PREFIX_RE, "")
 
-      # l2ping against a host that is gone will result in a good connect
-      # complete message with a timed out status indicating the ping failed
-      # do not send this to the parser as it will 'online' the record
-      # when we actually want to let it time out.
-      #
-      # TODO add a positive feed back loop to indicate we have attempted
-      # and failed to ping a device, for now, throw out everything that isn't Success
-      # (l2pinging a down host results in "Page Timeout")
-      # additional observed values include "ACL Connection Already Exists", "Command Disallowed"
-      # "LMP Response Timeout / LL Response Timeout", "Connection Accept Timeout Exceeded"
-      # "Connection Timeout"
-      #                                                                        This breaks if it starts with ^, no clue why
-      return if (buffer[0] =~ /^> HCI Event: .* \(0x(03|07)\)/ && buffer[1] !~ /\sStatus: Success \(0x00\)/ ) # "Connect Complete|Remote Name Req Complete"
+        # Branches are ordered by observed frequency (see
+        # spec/fixtures/btmon.stdout): received events (>) and sent commands (<)
+        # dominate the stream, "@" is uncommon, and "=" / the banner are rare.
+        case marker[0]
+        when ">"
+          # controller -> host; only "> HCI Event:" lines carry drop rules
+          if marker.start_with?("> HCI Event:")
+            code = (m = HCI_EVENT_CODE_RE.match(marker)) && m[1]
+
+            # "Command Complete" (0x0e) is by far the most common event, so
+            # check it first. Filters out local command responses but keeps
+            # remote replies.
+            return if code == "0e" && buffer[1] !~ /Remote/
+
+            # Command Status (0x0f) / Number of Completed Packets (0x13)
+            return if HCI_DROP_CODES.include?(code)
+
+            # Unknown event (0x00 only ever appears as "> HCI Event: Unknown")
+            return if code == "00"
+
+            # l2ping against a gone host yields a Connect Complete / Remote Name
+            # Req Complete with a non-Success status; do not send it to the
+            # parser as it would 'online' the record when we actually want to
+            # let it time out. (Page Timeout, ACL Connection Already Exists,
+            # Command Disallowed, LMP/LL Response Timeout, Connection Timeout...)
+            return if (code == "03" || code == "07") && buffer[1] !~ /\sStatus: Success \(0x00\)/
+          end
+
+        when "<"
+          # anything we sent to the controller (host -> controller)
+          return
+
+        when "@"
+          # local / MGMT events are noise except MGMT Device Found (0x0012)
+          return unless marker =~ MGMT_DEVICE_FOUND_RE
+
+        when "="
+          # bluez monitor notes / index bookkeeping
+          return if marker =~ NOTE_DROP_RE
+
+        else
+          return if marker.start_with?("Bluetooth monitor ver")
+        end
+      end
 
       # log used btmon output for review
       if BlueHydra.config["btmon_log"] && !BlueHydra.config["file"] && !BlueHydra.config["btmon_rawlog"]

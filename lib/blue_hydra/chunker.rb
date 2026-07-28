@@ -3,6 +3,36 @@ module BlueHydra
   # out of the btmon handler
   class Chunker
 
+    # HCI event codes (first line) that on their own indicate the start of a new
+    # device chunk. bluez monitor/packet.c static const struct event_data
+    # event_table. Frozen set so membership is O(1) and adding a code neither
+    # slows the check nor forces a per-call regex rebuild.
+    HCI_EVENT_START_CODES = [
+      "03", # Connect Complete
+      "04", # Connect Request
+      "07", # Remote Name Req Complete
+      "0e", # Command Complete
+      "12", # Role Change
+      "22", # Inquiry Result with RSSI
+      "2f", # Extended Inquiry Result
+      "3d", # Remote Host Supported Features
+    ].to_set.freeze
+
+    # Pulls the "(0xNN)" event/subevent code out of a monitor header line once,
+    # so we can dispatch on it instead of scanning the line with a regex per
+    # case. Compiled once here rather than rebuilt on every call.
+    EVENT_CODE_RE = /\(0x([0-9a-f]+)\)/.freeze
+
+    # LE Meta Event (first line) code; the deciding subevent is on the second
+    # line. bluez monitor/packet.h static const struct subevent_data
+    # le_meta_event_table: LE Connection Complete (0x01) /
+    # LE Advertising Report (0x02) / LE Extended Advertising Report (0x0d)
+    LE_META_EVENT_CODE     = "3e".freeze
+    LE_META_START_SUBEVENT = /\(0x0[12d]\)/.freeze
+
+    # name has been moved into the MGMT "Device Found" event in newer bluez
+    MGMT_DEVICE_FOUND_RE   = /@ MGMT Event: .* \(0x0012\)/.freeze
+
     # initialize with incoming (from btmon) and outgoing (to parser) queues
     def initialize(incoming_q, outgoing_q)
       @incoming_q = incoming_q
@@ -93,40 +123,35 @@ module BlueHydra
 
     # test if the message indicates the start of a new message
     def starting_chunk?(chunk=[])
+      line = chunk[0]
+      return false unless line
 
-      # numbers from bluez monitor/packet.c static const struct event_data event_table
-      chunk_zero_strings =[
-        "03", # Connect Complete
-        "04", # Connect Request
-        "07", # Remote Name Req Complete
-        "0e", # Command Complete
-        "12", # Role Change
-        "22", # Inquiry Result with RSSI
-        "2f", # Extended Inquiry Result
-        "3d", # Remote Host Supported Features
-      ]
+      # Nearly every message reaching the chunker is a "> HCI Event:" line (see
+      # spec/fixtures/btmon.stdout), so handle those first. Single-line HCI
+      # events and the LE Meta Event share this header, so extract the event
+      # code once and dispatch on it rather than running the line through a
+      # separate regex for each case.
+      if line.start_with?("> HCI Event:")
+        code = (m = EVENT_CODE_RE.match(line)) && m[1]
 
-      # if the first line of the message chunk matches one of these patterns
-      # it indicates a start chunk
-      if chunk[0] =~ /^> HCI Event: .* \(0x(#{chunk_zero_strings.join('|')})\)/
-        true
+        # LE Meta events (advertising / connection reports) are the most common
+        # chunk start in practice, so check the second-line subevent first:
+        # LE Connection Complete / LE Advertising Report / LE Extended
+        # Advertising Report
+        return true if code == LE_META_EVENT_CODE && chunk[1] =~ LE_META_START_SUBEVENT
 
-      # LE start chunks are identified by patterns in their first and second
-      # lines
-      elsif chunk[0] =~ /> HCI Event: LE Meta Event \(0x3e\)/ && # LE Meta Event
-        # Numbers from bluez monitor/packet.h static const struct subevent_data le_meta_event_table
-            chunk[1] =~ / \(0x0[12d]\)/ # LE Connection Complete / LE Advertising Report / LE Extended Advertising Report
-        true
+        # otherwise a bare classic start code is enough on its own. An HCI event
+        # line is never an MGMT event, so this is the final word for these lines.
+        return HCI_EVENT_START_CODES.include?(code)
+      end
 
-      #name has been moved into MGMT Event, not sure what else, at least it has an address
-      elsif chunk[0] =~/@ MGMT Event: .* \(0x0012\)/ # @ MGMT Event: Device Fo.. (0x0012)
-        true
+      # name has been moved into the MGMT Device Found event, at least it has an
+      # address (may be tool-prefixed, so this is matched unanchored)
+      return true if line =~ MGMT_DEVICE_FOUND_RE
 
       # otherwise this will get grouped with the current working set in the
       # chunk it up method
-      else
-        false
-      end
+      false
     end
   end
 end

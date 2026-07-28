@@ -9,6 +9,7 @@ require 'yaml'
 require 'fileutils'
 require 'socket'
 require 'timeout'
+require 'set'
 
 # Core Libs required by datamapper
 require 'stringio'
