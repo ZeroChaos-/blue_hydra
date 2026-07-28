@@ -140,8 +140,7 @@ module BlueHydra
       # numbers from bluez monitor/packet.c static const struct event_data event_table
       return if buffer.first =~ /^</ # Older bluez doesn't show the tool call
       return if buffer.first =~ /^\w*\[\d*\]: </ # New bluez prefixes with toolname[pid]:
-      return if buffer.first =~ /^@ (?!MGMT Event: .* \(0x0012\))/ # Device Found, older bluez
-      return if buffer.first =~ /^@ MGMT Event: .* \(0x0012\)/ # Device Found, newer bluez
+      return if buffer.first =~ /^@ (?!MGMT Event: .* \(0x0012\))/
       return if buffer.first =~ /^bluetoothd\[\d*\]: @ MGMT Open: bluetoothd/ #bluetoothd[2337376]: @ MGMT Open: bluetoothd (privileged) version 1.23
       return if buffer.first =~ /^bluetoothd\[\d*\]: @ MGMT Command: Start Discovery \(0x0023\)/
       return if buffer.first =~ /^> HCI Event: .* \(0x0f\)/ # "Command Status"
