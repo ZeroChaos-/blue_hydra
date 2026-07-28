@@ -26,6 +26,12 @@ module BlueHydra
     # bluez monitor "= ..." notes / index bookkeeping we drop
     NOTE_DROP_RE = /^= (bluetoothd: Unable to|New Index:|Delete Index:|Open Index:|Close Index:|Index Info:|Note:)/.freeze
 
+    # Flush the gzip log(s) to disk once at least this many seconds have elapsed
+    # since the previous flush completed. Zlib::GzipWriter buffers, and its
+    # trailer is only written on close, so an ungraceful stop can truncate the
+    # file; periodic SYNC_FLUSH keeps everything written so far recoverable.
+    LOG_FLUSH_INTERVAL = 60
+
     # initialize an instance of the class to run a command and push filtered
     # output into the parsing and processing pipeline
     #
@@ -67,6 +73,39 @@ module BlueHydra
       end
     end
 
+    # Flush the active gzip log writer(s) to disk if at least LOG_FLUSH_INTERVAL
+    # seconds have elapsed since the previous flush *completed*. Using
+    # Zlib::SYNC_FLUSH pushes a decompressable boundary to disk so the file
+    # stays recoverable even if the process is killed before the writer is
+    # closed. The interval is measured from completion so a slow flush can't
+    # cause back-to-back flushing.
+    def flush_logs_if_due
+      return unless @log_writer || @rawlog_writer
+
+      now = Time.now.to_i
+      @last_log_flush ||= now
+      return if (now - @last_log_flush) < LOG_FLUSH_INTERVAL
+
+      flush_writer(@log_writer)
+      flush_writer(@rawlog_writer)
+
+      # stamp *after* flushing so the next flush is at least LOG_FLUSH_INTERVAL
+      # seconds from when this one completed (and so a no-op flush doesn't retry
+      # on every subsequent line)
+      @last_log_flush = Time.now.to_i
+    end
+
+    # SYNC_FLUSH raises Zlib::BufError ("buffer error") when there is nothing
+    # new to flush -- e.g. a whole interval where every line was filtered out so
+    # nothing reached this writer. That is harmless, so swallow it rather than
+    # letting it kill the btmon thread.
+    def flush_writer(writer)
+      return unless writer
+      writer.flush(Zlib::SYNC_FLUSH)
+    rescue Zlib::BufError
+      nil
+    end
+
     # spawn a PTY to run @command
     def spawn
       PTY.spawn(@command) do |stdout, stdin, pid|
@@ -78,6 +117,10 @@ module BlueHydra
         begin
           # handle the streaming output line by line
           stdout.each do |line|
+
+            # periodically flush the gzip log(s) so an ungraceful stop leaves a
+            # recoverable file rather than a trailer-less, truncated one
+            flush_logs_if_due
 
             # log used btmon output for review if we are in debug mode
             if BlueHydra.config["btmon_rawlog"] && !BlueHydra.config["file"]

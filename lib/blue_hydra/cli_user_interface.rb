@@ -65,7 +65,13 @@ module BlueHydra
 
     def stop!
       puts "Exiting......."
-      @runner.stop
+      # Request the same graceful shutdown as Ctrl-C instead of exiting here.
+      # SIGINT sets the main loop's `done` flag; the main thread then breaks its
+      # work loop and runs runner.stop in its ensure. Cleanup MUST run on the
+      # main thread because runner.stop kills this cui_thread partway through
+      # (so we can't call it from here), and this yields a clean exit status 0
+      # (a bare `exit` from here exits 7 via bin/blue_hydra's `exit_status ||= 7`).
+      Process.kill("INT", Process.pid)
     end
 
     # This is the message that gets printed before starting the CUI. It waits
@@ -188,7 +194,7 @@ HELP
             puts "*** paused ***"
           end
         when ["q","Q"].include?(input) # bail out yo
-          exit
+          stop!
         when input == "f" # change filter mode forward
           if filter_mode == filter_modes.last
             # if current key is last key we just rotate back to the first key

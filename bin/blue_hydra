@@ -160,6 +160,13 @@ trap('SIGINT') do
   done = true
 end
 
+# SIGTERM (service managers, `kill`) should shut down as gracefully as SIGINT
+# so the work queue drains and the btmon gzip logs are closed cleanly rather
+# than truncated.
+trap('SIGTERM') do
+  done = true
+end
+
 got_sighup = false
 trap('SIGHUP') do
   got_sighup = true
@@ -176,7 +183,7 @@ begin
   loop do 
 
     if done
-      BlueHydra.logger.info("BlueHydra Killed! Exiting... SIGINT")
+      BlueHydra.logger.info("BlueHydra Killed! Exiting...")
       exit_status = 0
       break
     end

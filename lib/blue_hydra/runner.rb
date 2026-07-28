@@ -285,7 +285,15 @@ module BlueHydra
       return if @stopping
       @stopping = true
       BlueHydra.logger.info("Runner stopped. Exiting after clearing queue...")
-      self.btmon_thread.kill if self.btmon_thread # stop this first thread so data stops flowing ...
+      if self.btmon_thread
+        self.btmon_thread.kill # stop this first thread so data stops flowing ...
+        # ...then wait for it to actually finish unwinding. Its ensure closes
+        # the btmon gzip log(s), which writes the gzip trailer; without joining
+        # here that close races with process teardown and can leave a truncated
+        # ("unexpected end of file") log. Bounded so a wedged thread can't hang
+        # shutdown.
+        self.btmon_thread.join(5)
+      end
       unless BlueHydra.config["file"] #then stop doing anything if we are doing anything
         self.discovery_thread.kill if self.discovery_thread
         self.ubertooth_thread.kill if self.ubertooth_thread
