@@ -92,13 +92,13 @@ module BlueHydra
       # use lmp version to make a simplified copy of the version for table
       # display, set as :vers under the uuid key
       if bt_mode == "le"
-        if attrs[:lmp_version] && attrs[:lmp_version].first !~ /\(0x(00|FF|ff)\)/
+        if attrs[:lmp_version] && attrs[:lmp_version].first !~ /\(0x(00|FF)\)/i
           cui_status[@uuid][:vers] = "LE#{attrs[:lmp_version].first.split(" ")[1]}"
         elsif !cui_status[@uuid][:vers]
           cui_status[@uuid][:vers] = "BTLE"
         end
       else
-        if attrs[:lmp_version] && attrs[:lmp_version].first !~ /\(0x(00|ff|FF)\)/
+        if attrs[:lmp_version] && attrs[:lmp_version].first !~ /\(0x(00|FF)\)/i
           cui_status[@uuid][:vers] = "CL#{attrs[:lmp_version].first.split(" ")[1]}"
         elsif !cui_status[@uuid][:vers]
           cui_status[@uuid][:vers] = "CL/BR"
