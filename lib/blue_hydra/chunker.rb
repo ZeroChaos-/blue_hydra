@@ -97,29 +97,33 @@ module BlueHydra
       # numbers from bluez monitor/packet.c static const struct event_data event_table
       chunk_zero_strings =[
         "03", # Connect Complete
-        "12", # Role Change
-        "2f", # Extended Inquiry Result
-        "22", # Inquiry Result with RSSI
-        "07", # Remote Name Req Complete
-        "3d", # Remote Host Supported Features
         "04", # Connect Request
+        "07", # Remote Name Req Complete
         "0e", # Command Complete
+        "12", # Role Change
+        "22", # Inquiry Result with RSSI
+        "2f", # Extended Inquiry Result
+        "3d", # Remote Host Supported Features
       ]
 
       # if the first line of the message chunk matches one of these patterns
       # it indicates a start chunk
-      if chunk[0] =~ / \(0x(#{chunk_zero_strings.join('|')})\)/
+      if chunk[0] =~ /^> HCI Event: .* \(0x(#{chunk_zero_strings.join('|')})\)/
         true
 
       # LE start chunks are identified by patterns in their first and second
       # lines
-      elsif chunk[0] =~ / \(0x3e\)/ && # LE Meta Event
+      elsif chunk[0] =~ /> HCI Event: LE Meta Event \(0x3e\)/ && # LE Meta Event
         # Numbers from bluez monitor/packet.h static const struct subevent_data le_meta_event_table
             chunk[1] =~ / \(0x0[12d]\)/ # LE Connection Complete / LE Advertising Report / LE Extended Advertising Report
         true
 
       #name has been moved into MGMT Event, not sure what else, at least it has an address
       elsif chunk[0] =~/@ MGMT Event: .* \(0x0012\)/ # @ MGMT Event: Device Fo.. (0x0012)
+        true
+
+      # HCI Commands include mac addresses too and that causes multiple macs per chunk
+      elsif chunk[0] =~/HCI Command: .* \(0x08|0x000d\)/ # hcitool[pid] < HCI Command: LE Create Connection
         true
 
       # otherwise this will get grouped with the current working set in the

@@ -138,8 +138,12 @@ module BlueHydra
       # drop command complete messages and similar messages that do not seem to be useful
       #
       # numbers from bluez monitor/packet.c static const struct event_data event_table
-      return if buffer.first =~ /^</
-      return if buffer.first =~ /^@ (?!MGMT Event: .* \(0x0012\))/ # Device Found
+      return if buffer.first =~ /^</ # Older bluez doesn't show the tool call
+      return if buffer.first =~ /^\w*\[\d*\]: </ # New bluez prefixes with toolname[pid]:
+      return if buffer.first =~ /^@ (?!MGMT Event: .* \(0x0012\))/ # Device Found, older bluez
+      return if buffer.first =~ /^@ MGMT Event: .* \(0x0012\)/ # Device Found, newer bluez
+      return if buffer.first =~ /^bluetoothd\[\d*\]: @ MGMT Open: bluetoothd/ #bluetoothd[2337376]: @ MGMT Open: bluetoothd (privileged) version 1.23
+      return if buffer.first =~ /^bluetoothd\[\d*\]: @ MGMT Command: Start Discovery \(0x0023\)/
       return if buffer.first =~ /^> HCI Event: .* \(0x0f\)/ # "Command Status"
       return if buffer.first =~ /^> HCI Event: .* \(0x13\)/ # "Number of Completed Packets"
       return if buffer.first =~ /^> HCI Event: Unknown \(0x00\)/ 
@@ -151,7 +155,8 @@ module BlueHydra
       return if buffer.first =~ /^= Open Index:/
       return if buffer.first =~ /^= Close Index:/
       return if buffer.first =~ /^= Index Info:/
-      return if buffer.first =~ /^= Note:/
+      return if buffer.first =~ /^= Note:/ # Older bluez doesn't show the tool call
+      return if buffer.first =~ /^\w*\[\d*\]: = Note:/ # New bluez prefixes with toolname[pid]:
 
       # l2ping against a host that is gone will result in a good connect
       # complete message with a timed out status indicating the ping failed
