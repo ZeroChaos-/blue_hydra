@@ -122,10 +122,6 @@ module BlueHydra
       elsif chunk[0] =~/@ MGMT Event: .* \(0x0012\)/ # @ MGMT Event: Device Fo.. (0x0012)
         true
 
-      # HCI Commands include mac addresses too and that causes multiple macs per chunk
-      elsif chunk[0] =~/HCI Command: .* \(0x08|0x000d\)/ # hcitool[pid] < HCI Command: LE Create Connection
-        true
-
       # otherwise this will get grouped with the current working set in the
       # chunk it up method
       else
