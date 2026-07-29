@@ -401,6 +401,15 @@ HELP
           lines += 1
         end
 
+        # when debugging, add a line below the discovery status showing the
+        # chunker health counters so chunking problems are visible live
+        if BlueHydra.config["log_level"] == 'debug'
+          pbuff << "Chunker: multi-address-line: #{BlueHydra::CliUserInterfaceTracker.multi_address_chunk_count}, " \
+                   "multiple-unique-address: #{BlueHydra::CliUserInterfaceTracker.multi_unique_address_chunk_count}, " \
+                   "zero-address: #{BlueHydra::CliUserInterfaceTracker.zero_address_chunk_count}\n"
+          lines += 1
+        end
+
         # initialize a hash to track column widths, default value is 0
         max_lengths = Hash.new(0)
 

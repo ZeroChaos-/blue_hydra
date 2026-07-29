@@ -4,6 +4,44 @@ module BlueHydra
   class CliUserInterfaceTracker
     attr_accessor :runner, :chunk, :attrs, :address, :uuid
 
+    # Process-wide chunker health counters. Incremented from the chunker thread
+    # and read by the CUI layer (the visual display is added separately). Kept
+    # here so the CUI owns the status values it will surface.
+    #
+    # multi_address_chunk_count: chunks that carried more than one address
+    #   line, even when the addresses are the same MAC. Message order is
+    #   reliable while blue_hydra processes one device at a time, but will not
+    #   be once it processes multiple devices concurrently, so this tracks how
+    #   often chunks carry more than one address line.
+    # zero_address_chunk_count: chunks the chunker discarded because they had no
+    #   address at all.
+    # multi_unique_address_chunk_count: chunks the chunker discarded because
+    #   they had more than one unique address (a likely missing start block that
+    #   merged two devices' data).
+    @multi_address_chunk_count        = 0
+    @zero_address_chunk_count         = 0
+    @multi_unique_address_chunk_count = 0
+
+    class << self
+      attr_accessor :multi_address_chunk_count,
+                    :zero_address_chunk_count,
+                    :multi_unique_address_chunk_count
+    end
+
+    # Increment helpers, called by the chunker. Only the chunker thread writes
+    # these, so plain increments are safe.
+    def self.increment_multi_address_chunk_count
+      @multi_address_chunk_count += 1
+    end
+
+    def self.increment_zero_address_chunk_count
+      @zero_address_chunk_count += 1
+    end
+
+    def self.increment_multi_unique_address_chunk_count
+      @multi_unique_address_chunk_count += 1
+    end
+
     # This method initializes with a runner and some data and then handles
     # updating the cui_status to track the devices for the CUI
     #

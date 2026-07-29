@@ -365,6 +365,48 @@ describe BlueHydra::CliUserInterfaceTracker do
     expect(status[:type]).to eq("Watch ")
   end
 
+  it "keeps the LE version label when the subversion hex contains 00 or ff" do
+    runner = FakeRunner.new
+    chunk  = [["      LE Advertising Report (0x02)"]]
+    addr   = "AA:BB:CC:DD:EE:23"
+    # subversion 0x0016 contains the substring "0x00" and must NOT be mistaken
+    # for an unknown/invalid version code (that regression showed everything as
+    # BTLE)
+    attrs  = {
+      address:     [addr],
+      last_seen:   [Time.now.to_i],
+      lmp_version: ["Bluetooth 5.2 (0x0b) - Subversion 22 (0x0016)"]
+    }
+    BlueHydra::CliUserInterfaceTracker.new(runner, chunk, attrs, addr).update_cui_status
+    expect(runner.cui_status.values.first[:vers]).to eq("LE5.2")
+  end
+
+  it "keeps the LE version label when the subversion hex is ffff" do
+    runner = FakeRunner.new
+    chunk  = [["      LE Advertising Report (0x02)"]]
+    addr   = "AA:BB:CC:DD:EE:25"
+    attrs  = {
+      address:     [addr],
+      last_seen:   [Time.now.to_i],
+      lmp_version: ["Bluetooth 5.0 (0x09) - Subversion 65535 (0xffff)"]
+    }
+    BlueHydra::CliUserInterfaceTracker.new(runner, chunk, attrs, addr).update_cui_status
+    expect(runner.cui_status.values.first[:vers]).to eq("LE5.0")
+  end
+
+  it "falls back to BTLE for an unknown/invalid le version code (0x00)" do
+    runner = FakeRunner.new
+    chunk  = [["      LE Advertising Report (0x02)"]]
+    addr   = "AA:BB:CC:DD:EE:24"
+    attrs  = {
+      address:     [addr],
+      last_seen:   [Time.now.to_i],
+      lmp_version: ["Bluetooth 1.0b (0x00) - Subversion 1 (0x0001)"]
+    }
+    BlueHydra::CliUserInterfaceTracker.new(runner, chunk, attrs, addr).update_cui_status
+    expect(runner.cui_status.values.first[:vers]).to eq("BTLE")
+  end
+
   it "reuses the existing uuid when the same address is tracked again" do
     runner = FakeRunner.new
     chunk  = [["      LE Advertising Report (0x02)"]]
@@ -712,6 +754,23 @@ describe "BlueHydra::Runner helpers" do
     expect(runner.ubertooth_firmware_check("everything is fine")).to eq(true)
   end
 
+  it "update_processing_speed divides the processed count by the actual elapsed time" do
+    runner = BlueHydra::Runner.new
+    runner.instance_variable_set(:@processing_tracker, 40)
+    runner.instance_variable_set(:@processing_timer, Time.now.to_i - 20) # 20s window
+    runner.update_processing_speed
+    expect(runner.processing_speed).to be_within(0.01).of(2.0) # 40 / 20
+  end
+
+  it "update_processing_speed does nothing until the sampling window elapses" do
+    runner = BlueHydra::Runner.new
+    runner.processing_speed = 7.0
+    runner.instance_variable_set(:@processing_tracker, 5)
+    runner.instance_variable_set(:@processing_timer, Time.now.to_i - 3) # < 10s
+    runner.update_processing_speed
+    expect(runner.processing_speed).to eq(7.0) # unchanged
+  end
+
   it "push_to_queue enqueues a classic info scan" do
     runner = BlueHydra::Runner.new
     runner.query_history = {}
@@ -810,6 +869,15 @@ describe BlueHydra::CliUserInterface do
     expect(cui.result_queue).to be(runner.result_queue)
     expect(cui.l2ping_queue).to be(runner.l2ping_queue)
     expect(cui.query_history).to be(runner.query_history)
+  end
+
+  it "stop! requests graceful shutdown by signalling SIGINT to itself" do
+    runner = CuiFakeRunner.new
+    cui = BlueHydra::CliUserInterface.new(runner)
+    allow(cui).to receive(:puts) # silence the "Exiting..." banner
+    # must stub Process.kill or we would actually SIGINT the test runner
+    expect(Process).to receive(:kill).with("INT", Process.pid)
+    cui.stop!
   end
 
   it "reports info_scan_queue length or 'disabled' based on config" do

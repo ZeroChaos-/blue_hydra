@@ -60,13 +60,32 @@ module BlueHydra
 
           # if we just got a new message shovel the working set into the
           # outgoing queue and reset it
-          address_list = working_set.flatten.reject{|x| x =~ /Direct address/}.join("").scan(/^\s*.*ddress: ((?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})/).flatten.uniq
+          address_lines = working_set.flatten.reject{|x| x =~ /Direct address/}.join("").scan(/^\s*.*ddress: ((?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})/).flatten
+          address_list  = address_lines.uniq
           address_count = address_list.count
+
+          # Count every chunk that carries more than one address line - even
+          # when they are all the same MAC. blue_hydra currently processes one
+          # device at a time so message order is reliable; the plan to process
+          # multiple devices concurrently will make that order unreliable, so we
+          # need visibility into any chunk holding more than one address line.
+          # This is orthogonal to the routing below: a valid single-address
+          # chunk is still pushed for processing. The full chunk is only dropped
+          # to the chunk log when chunker_debug is enabled.
+          if address_lines.count > 1
+            BlueHydra::CliUserInterfaceTracker.increment_multi_address_chunk_count
+            if BlueHydra.config["chunker_debug"]
+              working_set.flatten.each{|msg| BlueHydra.chunk_logger.info(msg.chomp) }
+              BlueHydra.chunk_logger.info("-------------------------------------------------------------------------------")
+            end
+          end
+
           if address_count == 1
             unless BlueHydra.config["ignore_mac"].include?(address_list[0])
               @outgoing_q.push working_set
             end
           elsif address_count < 1
+            BlueHydra::CliUserInterfaceTracker.increment_zero_address_chunk_count
             if BlueHydra.config["chunker_debug"]
               working_set.flatten.each{|msg| BlueHydra.chunk_logger.info(msg.chomp) }
               BlueHydra.chunk_logger.info("-------------------------------------------------------------------------------")
@@ -81,12 +100,12 @@ module BlueHydra
               severity: 'WARN'
             })
           else
-            if BlueHydra.config["chunker_debug"]
-              working_set.flatten.each{|msg| BlueHydra.chunk_logger.info(msg.chomp) }
-              BlueHydra.chunk_logger.info("-------------------------------------------------------------------------------")
-            else
-              BlueHydra.logger.warn("Got a chunk with multiple addresss, missing a start block. Discarding corrupted data...")
-            end
+            # more than one unique address: a start block was almost certainly
+            # missed and two devices' data got merged, so discard it. The warn
+            # is always emitted; the full chunk is dropped to the chunk log
+            # above only when chunker_debug is on.
+            BlueHydra::CliUserInterfaceTracker.increment_multi_unique_address_chunk_count
+            BlueHydra.logger.warn("Got a chunk with multiple addresss, missing a start block. Discarding corrupted data...")
             BlueHydra.send_event('blue_hydra',
             {
               key: 'bluehydra_chunk_2_address',

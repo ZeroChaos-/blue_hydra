@@ -141,4 +141,44 @@ describe BlueHydra::BtmonHandler do
       file.unlink if file
     end
   end
+
+  describe "gzip log durability" do
+    # flush_writer uses Zlib::SYNC_FLUSH, which raises Zlib::BufError when there
+    # is nothing new to flush (e.g. an interval where every line was filtered
+    # out). That previously crashed the btmon thread; flush_writer must swallow
+    # it.
+    it "flush_writer swallows Zlib::BufError when there is nothing new to flush" do
+      require 'zlib'
+      require 'tempfile'
+      handler = BlueHydra::BtmonHandler.allocate
+      file = Tempfile.new(['bh_flush', '.gz'])
+      gz   = Zlib::GzipWriter.wrap(File.open(file.path, 'wb'))
+
+      gz.puts("first line")
+      handler.flush_writer(gz)                                 # flush real data - fine
+      expect { handler.flush_writer(gz) }.not_to raise_error   # nothing new -> BufError guarded
+      expect { handler.flush_writer(gz) }.not_to raise_error
+
+      gz.close
+      file.unlink
+    end
+
+    # opening the gzip log in binary mode ('wb') avoids the ASCII-8BIT -> UTF-8
+    # conversion crash; here we confirm the resulting file is a valid,
+    # decodable gzip after periodic flushes + close.
+    it "writes a valid, decodable gzip log through periodic flushes" do
+      require 'zlib'
+      require 'tempfile'
+      handler = BlueHydra::BtmonHandler.allocate
+      file = Tempfile.new(['bh_valid', '.gz'])
+      gz   = Zlib::GzipWriter.wrap(File.open(file.path, 'wb'))
+
+      gz.puts("line one"); handler.flush_writer(gz)
+      gz.puts("line two"); handler.flush_writer(gz)
+      gz.close
+
+      expect(Zlib::GzipReader.open(file.path, &:read)).to eq("line one\nline two\n")
+      file.unlink
+    end
+  end
 end
