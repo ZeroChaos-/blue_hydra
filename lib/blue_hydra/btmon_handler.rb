@@ -44,6 +44,10 @@ module BlueHydra
       @command = command
       @parse_queue = parse_queue
 
+      # decide whether btmon will emit color codes (and thus whether we need to
+      # strip them per line) before we spawn
+      configure_color_handling
+
       # # log used btmon output for review if requested
       if BlueHydra.config["btmon_log"]
         @log_file = if Dir.exist? ('/var/log/blue_hydra')
@@ -106,6 +110,35 @@ module BlueHydra
       nil
     end
 
+    # Decide how to handle btmon color codes. If we are actually running btmon
+    # and it supports "--color=never", ask it to emit no ANSI color codes and
+    # skip the per-line color-stripping gsub. For file replay (cat/xzcat/zcat)
+    # or an older btmon without the flag we keep stripping, since the input may
+    # still contain color codes.
+    def configure_color_handling
+      if @command.start_with?("btmon") && color_never_supported?
+        @command = "#{@command} --color=never" unless @command.include?("--color=never")
+        @strip_colors = false
+      else
+        @strip_colors = true
+      end
+    end
+
+    # true when the installed btmon advertises "--color=never" in its help.
+    # Any failure or an older btmon without the flag returns false so we keep
+    # stripping colors ourselves.
+    def color_never_supported?
+      btmon_help.include?("--color=never")
+    end
+
+    # capture `btmon --help` output (stderr merged, since btmon prints usage
+    # there). Returns "" on failure.
+    def btmon_help
+      `btmon --help 2>&1`
+    rescue
+      ""
+    end
+
     # spawn a PTY to run @command
     def spawn
       PTY.spawn(@command) do |stdout, stdin, pid|
@@ -127,26 +160,29 @@ module BlueHydra
               @rawlog_writer.puts(line.chomp)
             end
 
-            # strip out color codes
-            known_colors = [
-              "\e[0;30m", "\e[1;30m",
-              "\e[0;31m", "\e[1;31m",
-              "\e[0;32m", "\e[1;32m",
-              "\e[0;33m", "\e[1;33m",
-              "\e[0;34m", "\e[1;34m",
-              "\e[0;35m", "\e[1;35m",
-              "\e[0;36m", "\e[1;36m",
-              "\e[0;37m", "\e[1;37m",
-              "\e[0m",
-            ]
+            # strip out color codes, unless we asked btmon not to emit them
+            # (--color=never), in which case there is nothing to strip
+            if @strip_colors
+              known_colors = [
+                "\e[0;30m", "\e[1;30m",
+                "\e[0;31m", "\e[1;31m",
+                "\e[0;32m", "\e[1;32m",
+                "\e[0;33m", "\e[1;33m",
+                "\e[0;34m", "\e[1;34m",
+                "\e[0;35m", "\e[1;35m",
+                "\e[0;36m", "\e[1;36m",
+                "\e[0;37m", "\e[1;37m",
+                "\e[0m",
+              ]
 
-            begin
-              known_colors.each do |c|
-                line = line.gsub(c, "")
+              begin
+                known_colors.each do |c|
+                  line = line.gsub(c, "")
+                end
+              rescue ArgumentError
+                BlueHydra.logger.warn("Non UTF-8 encoding in line: #{line.chomp}")
+                next
               end
-            rescue ArgumentError
-              BlueHydra.logger.warn("Non UTF-8 encoding in line: #{line.chomp}")
-              next
             end
 
             # Messages are indented under a header as follows

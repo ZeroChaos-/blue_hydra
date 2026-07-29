@@ -74,4 +74,71 @@ describe BlueHydra::BtmonHandler do
       expect(enqueued?(["Bluetooth monitor ver 5.72\r\n"])).to eq(false)
     end
   end
+
+  describe "btmon --color=never handling" do
+    it "detects --color=never support from btmon --help" do
+      handler = BlueHydra::BtmonHandler.allocate
+
+      allow(handler).to receive(:btmon_help).and_return(
+        "Usage:\n\tbtmon [options]\nOptions:\n\t--color=never  Disable colored output\n"
+      )
+      expect(handler.color_never_supported?).to eq(true)
+
+      # older btmon without the flag
+      allow(handler).to receive(:btmon_help).and_return(
+        "Usage:\n\tbtmon [options]\nOptions:\n\t-w, --write <file>  Save traces\n"
+      )
+      expect(handler.color_never_supported?).to eq(false)
+    end
+
+    it "disables the color-stripping gsub and adds --color=never when supported" do
+      supported = BlueHydra::BtmonHandler.allocate
+      supported.instance_variable_set(:@command, "btmon --columns 170 -T -i hci0")
+      allow(supported).to receive(:color_never_supported?).and_return(true)
+
+      supported.configure_color_handling
+
+      expect(supported.instance_variable_get(:@strip_colors)).to eq(false)
+      expect(supported.instance_variable_get(:@command)).to include("--color=never")
+
+      # older btmon without the flag keeps stripping and is left unmodified
+      legacy = BlueHydra::BtmonHandler.allocate
+      legacy.instance_variable_set(:@command, "btmon --columns 170 -T -i hci0")
+      allow(legacy).to receive(:color_never_supported?).and_return(false)
+
+      legacy.configure_color_handling
+
+      expect(legacy.instance_variable_get(:@strip_colors)).to eq(true)
+      expect(legacy.instance_variable_get(:@command)).not_to include("--color=never")
+    end
+
+    it "still strips color codes when reading from a file" do
+      require 'tempfile'
+      # a color-coded btmon message (as raw btmon logs contain) that passes the
+      # enqueue filter (Extended Inquiry Result, 0x2f)
+      content =
+        "\e[0;35m> HCI Event: Extended Inquiry Result\e[0m (0x2f) plen 255   2015-12-10 11:30:24.387882\r\n" \
+        "        Address: \e[0;33mDE:AD:BE:EF:CA:FE\e[0m (OUI DE-AD-BE)\r\n"
+
+      file = Tempfile.new(['btmon_colored', '.log'])
+      file.write(content)
+      file.close
+
+      queue = Queue.new
+      begin
+        # file mode (command does not start with "btmon") -> should still strip
+        BlueHydra::BtmonHandler.new("cat #{file.path}", queue)
+      rescue BtmonExitedError
+        # expected at end of file
+      end
+
+      expect(queue.empty?).to eq(false)
+      joined = queue.pop.join
+      expect(joined).not_to include("\e[")            # no ANSI escapes remain
+      expect(joined).to include("Extended Inquiry Result")
+      expect(joined).to include("DE:AD:BE:EF:CA:FE")
+    ensure
+      file.unlink if file
+    end
+  end
 end
