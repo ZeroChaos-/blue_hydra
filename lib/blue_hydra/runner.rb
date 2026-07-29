@@ -238,10 +238,10 @@ module BlueHydra
           BlueHydra.logger.error("#{x}")
         end
         BlueHydra.send_event('blue_hydra',
-        {key:'blue_hydra_master_thread_error',
-        title:'Blue Hydras Master Thread Encountered An Error',
-        message:"Runner master thread: #{e.message}",
-        severity:'ERROR'
+        {key: 'blue_hydra_master_thread_error',
+        title: 'Blue Hydras Master Thread Encountered An Error',
+        message: "Runner master thread: #{e.message}",
+        severity: 'ERROR'
         })
       end
     end
@@ -360,10 +360,10 @@ module BlueHydra
         rescue BtmonExitedError
           BlueHydra.logger.error("Btmon thread exiting...")
           BlueHydra.send_event('blue_hydra',
-            {key:'blue_hydra_btmon_exited',
-          title:'Blue Hydras Btmon Thread Exited',
-          message:"Btmon Thread exited...",
-          severity:'ERROR'
+            {key: 'blue_hydra_btmon_exited',
+          title: 'Blue Hydras Btmon Thread Exited',
+          message: "Btmon Thread exited...",
+          severity: 'ERROR'
           })
         rescue => e
           BlueHydra.logger.error("Btmon thread #{e.message}")
@@ -371,10 +371,10 @@ module BlueHydra
             BlueHydra.logger.error("#{x}")
           end
           BlueHydra.send_event('blue_hydra',
-          {key:'blue_hydra_btmon_thread_error',
-          title:'Blue Hydras BTmon Thread Encountered An Error',
-          message:"Btmon thread #{e.message}",
-          severity:'ERROR'
+          {key: 'blue_hydra_btmon_thread_error',
+          title: 'Blue Hydras BTmon Thread Encountered An Error',
+          message: "Btmon thread #{e.message}",
+          severity: 'ERROR'
           })
         end
       end
@@ -425,10 +425,10 @@ module BlueHydra
               end
               BlueHydra.logger.fatal("Bluetoothd is running but not controlled by init or functioning, please restart it manually.")
               BlueHydra.send_event('blue_hydra',
-                                          {key:'blue_hydra_bluetoothd_error',
-                                           title:'Blue Hydra Encounterd Unrecoverable bluetoothd Error',
-                                           message:"bluetoothd is running but not controlled by init or functioning",
-                                           severity:'FATAL'
+                                          {key: 'blue_hydra_bluetoothd_error',
+                                           title: 'Blue Hydra Encounterd Unrecoverable bluetoothd Error',
+                                           message: "bluetoothd is running but not controlled by init or functioning",
+                                           severity: 'FATAL'
                                           })
               exit 1
             end
@@ -454,18 +454,18 @@ module BlueHydra
           if bluetoothd_restart[:stderr]
             BlueHydra.logger.error("Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}")
             BlueHydra.send_event('blue_hydra',
-                                        {key:'blue_hydra_bluetoothd_restart_failed',
-                                         title:'Blue Hydra Failed To Restart bluetoothd',
-                                         message:"Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}",
-                                         severity:'ERROR'
+                                        {key: 'blue_hydra_bluetoothd_restart_failed',
+                                         title: 'Blue Hydra Failed To Restart bluetoothd',
+                                         message: "Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}",
+                                         severity: 'ERROR'
                                         })
           end
           BlueHydra.logger.fatal("Bluetoothd is not functioning as expected and we failed to automatically recover.")
           BlueHydra.send_event('blue_hydra',
-                                      {key:'blue_hydra_bluetoothd_jank',
-                                       title:'Blue Hydra Unable To Recover From Bluetoothd Error',
-                                       message:"Bluetoothd is not functioning as expected and we failed to automatically recover.",
-                                       severity:'FATAL'
+                                      {key: 'blue_hydra_bluetoothd_jank',
+                                       title: 'Blue Hydra Unable To Recover From Bluetoothd Error',
+                                       message: "Bluetoothd is not functioning as expected and we failed to automatically recover.",
+                                       severity: 'FATAL'
                                       })
           exit 1
         end
@@ -691,10 +691,10 @@ module BlueHydra
                 end
                 BlueHydra.logger.fatal("Bluez reported #{BlueHydra.config["bt_device"]} not ready and failed to reset with rfkill")
                 BlueHydra.send_event('blue_hydra',
-                {key:'blue_hydra_bluez_error',
-                title:'Blue Hydra Encountered Bluez Error',
-                message:"Bluez reported #{BlueHydra.config["bt_device"]} not ready and failed to reset with rfkill",
-                severity:'FATAL'
+                {key: 'blue_hydra_bluez_error',
+                title: 'Blue Hydra Encountered Bluez Error',
+                message: "Bluez reported #{BlueHydra.config["bt_device"]} not ready and failed to reset with rfkill",
+                severity: 'FATAL'
                 })
                 exit 1
               end
@@ -704,10 +704,10 @@ module BlueHydra
                 BlueHydra.logger.error("#{x}")
               end
               BlueHydra.send_event('blue_hydra',
-              {key:'blue_hydra_discovery_loop_error',
-              title:'Blue Hydras Discovery Loop Encountered An Error',
-              message:"Discovery loop crashed: #{e.message}",
-              severity:'ERROR'
+              {key: 'blue_hydra_discovery_loop_error',
+              title: 'Blue Hydras Discovery Loop Encountered An Error',
+              message: "Discovery loop crashed: #{e.message}",
+              severity: 'ERROR'
               })
               BlueHydra.logger.error("Sleeping 20s...")
               sleep 20
@@ -720,10 +720,10 @@ module BlueHydra
             BlueHydra.logger.error("#{x}")
           end
           BlueHydra.send_event('blue_hydra',
-          {key:'blue_hydra_discovery_thread_error',
-          title:'Blue Hydras Discovery Thread Encountered An Error',
-          message:"Discovery thread error: #{e.message}",
-          severity:'ERROR'
+          {key: 'blue_hydra_discovery_thread_error',
+          title: 'Blue Hydras Discovery Thread Encountered An Error',
+          message: "Discovery thread error: #{e.message}",
+          severity: 'ERROR'
           })
         end
       end
@@ -846,10 +846,10 @@ module BlueHydra
             end
             BlueHydra.logger.warn("Restarting Chunker...")
             BlueHydra.send_event('blue_hydra',
-            {key:'blue_hydra_chunker_error',
-            title:'Blue Hydras Chunker Thread Encountered An Error',
-            message:"Chunker thread error: #{e.message}",
-            severity:'ERROR'
+            {key: 'blue_hydra_chunker_error',
+            title: 'Blue Hydras Chunker Thread Encountered An Error',
+            message: "Chunker thread error: #{e.message}",
+            severity: 'ERROR'
             })
           end
           sleep 1
@@ -1003,10 +1003,10 @@ module BlueHydra
             BlueHydra.logger.error("#{x}")
           end
           BlueHydra.send_event('blue_hydra',
-          {key:'blue_hydra_parser_thread_error',
-          title:'Blue Hydras Parser Thread Encountered An Error',
-          message:"Parser thread error: #{e.message}",
-          severity:'ERROR'
+          {key: 'blue_hydra_parser_thread_error',
+          title: 'Blue Hydras Parser Thread Encountered An Error',
+          message: "Parser thread error: #{e.message}",
+          severity: 'ERROR'
           })
         end
       end
@@ -1046,10 +1046,10 @@ module BlueHydra
             BlueHydra.logger.error("#{x}")
           end
           BlueHydra.send_event('blue_hydra',
-          {key:'blue_hydra_rssi_api_thread_error',
-          title:'Blue Hydras RSSI API Thread Encountered An Error',
-          message:"RSSI API thread error: #{e.message}",
-          severity:'ERROR'
+          {key: 'blue_hydra_rssi_api_thread_error',
+          title: 'Blue Hydras RSSI API Thread Encountered An Error',
+          message: "RSSI API thread error: #{e.message}",
+          severity: 'ERROR'
           })
         end
       end
@@ -1075,10 +1075,10 @@ module BlueHydra
             BlueHydra.logger.error("#{x}")
           end
           BlueHydra.send_event('blue_hydra',
-          {key:'blue_hydra_rssi_cleanup_thread_error',
-          title:'Blue Hydras RSSI Cleanup Thread Encountered An Error',
-          message:"RSSI CLEANUP thread error: #{e.message}",
-          severity:'ERROR'
+          {key: 'blue_hydra_rssi_cleanup_thread_error',
+          title: 'Blue Hydras RSSI Cleanup Thread Encountered An Error',
+          message: "RSSI CLEANUP thread error: #{e.message}",
+          severity: 'ERROR'
           })
         end
       end
@@ -1228,10 +1228,10 @@ module BlueHydra
             BlueHydra.logger.error("#{x}")
           end
           BlueHydra.send_event('blue_hydra',
-          {key:'blue_hydra_result_thread_error',
-          title:'Blue Hydras Result Thread Encountered An Error',
-          message:"Result thread #{e.message}",
-          severity:'ERROR'
+          {key: 'blue_hydra_result_thread_error',
+          title: 'Blue Hydras Result Thread Encountered An Error',
+          message: "Result thread #{e.message}",
+          severity: 'ERROR'
           })
         end
       end

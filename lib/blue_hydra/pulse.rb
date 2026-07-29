@@ -9,7 +9,7 @@ module BlueHydra
     end
 
     def reset
-      if BlueHydra.pulse ||  BlueHydra.pulse_debug
+      if BlueHydra.pulse || BlueHydra.pulse_debug
 
         BlueHydra.logger.info("Sending db reset to pulse")
 
@@ -25,7 +25,7 @@ module BlueHydra
     end
 
     def hard_reset
-      if BlueHydra.pulse ||  BlueHydra.pulse_debug
+      if BlueHydra.pulse || BlueHydra.pulse_debug
 
         BlueHydra.logger.info("Sending db hard reset to pulse")
 

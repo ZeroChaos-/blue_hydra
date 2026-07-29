@@ -320,10 +320,10 @@ HELP
           BlueHydra.logger.error("#{x}")
         end
         BlueHydra.send_event("blue_hydra",
-        {key:'blue_hydra_cui_thread_error',
-        title:'Blue Hydras api Thread Encountered An Error',
-        message:"#{e.message}",
-        severity:'ERROR'
+        {key: 'blue_hydra_cui_thread_error',
+        title: 'Blue Hydras api Thread Encountered An Error',
+        message: "#{e.message}",
+        severity: 'ERROR'
         })
       end
     end
@@ -619,10 +619,10 @@ HELP
           BlueHydra.logger.error("#{x}")
         end
         BlueHydra.send_event("blue_hydra",
-        {key:'blue_hydra_cui_thread_error',
-        title:'Blue Hydras CUI Thread Encountered An Error',
-        message:"#{e.message}",
-        severity:'ERROR'
+        {key: 'blue_hydra_cui_thread_error',
+        title: 'Blue Hydras CUI Thread Encountered An Error',
+        message: "#{e.message}",
+        severity: 'ERROR'
         })
       end
     end
