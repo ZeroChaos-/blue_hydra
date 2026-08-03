@@ -29,6 +29,11 @@ class BluezNotReadyError < StandardError; end
 class FailedThreadError < StandardError; end
 class BtmonExitedError < StandardError; end
 
+# raised by BlueHydra::Mgmt when the control socket keeps failing after a
+# reopen+retry. Mgmt emits a notification event before raising this, so callers
+# should treat it as already-reported and simply back off / recover.
+class MgmtSocketError < StandardError; end
+
 # Primary
 module BlueHydra
   # 0.0.1 first stable verison
@@ -58,7 +63,7 @@ module BlueHydra
     "log_level"          => "info",
     "bt_device"          => "hci0",       # change for external ud100
     "ubertooth_index"    => "0",          # ubertooth device index
-    "info_scan_rate"     => 240,          # 4 minutes in seconds
+    "info_scan_rate"     => 600,          # seconds between info scans of a device (10 minutes)
     "btmon_log"          => false,        # if set will write used btmon output to a log file
     "btmon_rawlog"       => false,        # if set will write raw btmon output to a log file
     "file"               => false,        # if set will read from file, not hci dev
@@ -375,6 +380,9 @@ rescue LoadError => e
 end
 
 require 'blue_hydra/chunker'
+require 'blue_hydra/mgmt'
+require 'blue_hydra/hci_command'
+require 'blue_hydra/l2ping'
 require 'blue_hydra/runner'
 require 'blue_hydra/command'
 require 'blue_hydra/device'
@@ -386,17 +394,26 @@ require 'blue_hydra/cli_user_interface_tracker'
 # available as an internal value
 
 BlueHydra::EnumLocalAddr = Proc.new do
-  BlueHydra::Command.execute3(
-    "hciconfig #{BlueHydra.config["bt_device"]}")[:stdout].scan(
-      /((?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2})/i
-    ).flatten
+  # Read the adapter address from the kernel mgmt API (Read Controller
+  # Information) instead of scraping `hciconfig` output. Returns an array
+  # (possibly empty) to preserve the previous contract where callers take
+  # .first.
+  index = BlueHydra.config["bt_device"].to_s[/\d+/].to_i
+  mgmt  = BlueHydra::Mgmt.new(index)
+  begin
+    address = mgmt.read_address
+    address ? [address] : []
+  ensure
+    mgmt.close
+  end
 end
 
 begin
-  BlueHydra::LOCAL_ADAPTER_ADDRESS = BlueHydra::EnumLocalAddr.call.first
+  local_adapter_address = BlueHydra::EnumLocalAddr.call.first
+  raise "no address for #{BlueHydra.config["bt_device"]}" if local_adapter_address.nil?
 rescue
   if ENV["BLUE_HYDRA"] == "test"
-    BlueHydra::LOCAL_ADAPTER_ADDRESS = "JE:NK:IN:SJ:EN:KI"
+    local_adapter_address = "JE:NK:IN:SJ:EN:KI"
     puts "Failed to find mac address for #{BlueHydra.config["bt_device"]}, faking for tests"
   else
     msg = "Unable to read the mac address from #{BlueHydra.config["bt_device"]}"
@@ -411,6 +428,8 @@ rescue
     exit 1
   end
 end
+
+BlueHydra::LOCAL_ADAPTER_ADDRESS = local_adapter_address
 
 # set all String properties to have a default length of 255
 DataMapper::Property::String.length(255)

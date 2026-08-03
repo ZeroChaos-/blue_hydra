@@ -307,8 +307,6 @@ HELP
                result_queue: result_queue.length,
                info_scan_queue: info_scan_queue,
                l2ping_queue: l2ping_queue.length,
-               #discovery_timer: Time.now.to_i - scanner_status[:test_discovery].to_i,
-               #ubertooth_timer: Time.now.to_i - scanner_status[:ubertooth].to_i
               })
             )
           end
@@ -346,11 +344,13 @@ HELP
 
         # skip if we are reading from a file
         unless BlueHydra.config["file"]
-          # check status of test discovery
-          if scanner_status[:test_discovery]
-            discovery_time = Time.now.to_i - scanner_status[:test_discovery]
+          # percentage of time the controller is actually scanning (discovery
+          # on) vs stopped for a connect / info / l2ping window. Sourced from the
+          # mgmt kernel Discovering events.
+          if @runner.mgmt
+            scanning_pct = "#{@runner.mgmt.scanning_percentage.round}%"
           else
-            discovery_time = "not started"
+            scanning_pct = "not started"
           end
 
           # check status of ubertooth
@@ -397,7 +397,7 @@ HELP
         # about the status of the discovery and ubertooth timers from the
         # runner
         unless BlueHydra.config["file"]
-          pbuff <<  "Discovery status timer: #{discovery_time}, Ubertooth status: #{ubertooth_time}, Filter mode: #{filter_mode}\n"
+          pbuff <<  "Scanning uptime: #{scanning_pct}, Ubertooth status: #{ubertooth_time}, Filter mode: #{filter_mode}\n"
           lines += 1
         end
 
@@ -406,7 +406,12 @@ HELP
         if BlueHydra.config["log_level"] == 'debug'
           pbuff << "Chunker: multi-address-line: #{BlueHydra::CliUserInterfaceTracker.multi_address_chunk_count}, " \
                    "multiple-unique-address: #{BlueHydra::CliUserInterfaceTracker.multi_unique_address_chunk_count}, " \
-                   "zero-address: #{BlueHydra::CliUserInterfaceTracker.zero_address_chunk_count}\n"
+                   "zero-address: #{BlueHydra::CliUserInterfaceTracker.zero_address_chunk_count}, " \
+                   "truncation-detected: #{BlueHydra::CliUserInterfaceTracker.truncation_detected_count}\n"
+          lines += 1
+          pbuff << "Auto-connect: added: #{BlueHydra::CliUserInterfaceTracker.auto_connect_added_count}, " \
+                   "connected: #{BlueHydra::CliUserInterfaceTracker.auto_connect_connected_count}, " \
+                   "failed: #{BlueHydra::CliUserInterfaceTracker.auto_connect_failed_count}\n"
           lines += 1
         end
 

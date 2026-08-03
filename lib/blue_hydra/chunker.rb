@@ -10,10 +10,14 @@ module BlueHydra
     HCI_EVENT_START_CODES = [
       "03", # Connect Complete
       "04", # Connect Request
+      "05", # Disconnect Complete (new format carries Handle+Address)
       "07", # Remote Name Req Complete
+      "0b", # Read Remote Supported Features Complete (Handle+Address)
+      "0c", # Read Remote Version Information Complete (Handle+Address, LMP version)
       "0e", # Command Complete
       "12", # Role Change
       "22", # Inquiry Result with RSSI
+      "23", # Read Remote Extended Features Complete (Handle+Address)
       "2f", # Extended Inquiry Result
       "3d", # Remote Host Supported Features
     ].to_set.freeze
@@ -25,13 +29,39 @@ module BlueHydra
 
     # LE Meta Event (first line) code; the deciding subevent is on the second
     # line. bluez monitor/packet.h static const struct subevent_data
-    # le_meta_event_table: LE Connection Complete (0x01) /
-    # LE Advertising Report (0x02) / LE Extended Advertising Report (0x0d)
+    # le_meta_event_table. Subevents that carry a device address and so start
+    # their own chunk:
+    #   0x01 LE Connection Complete
+    #   0x02 LE Advertising Report
+    #   0x03 LE Connection Update Complete (Handle+Address)
+    #   0x04 LE Read Remote Used Features (Handle+Address)
+    #   0x07 LE Data Length Change (Handle+Address)
+    #   0x0a LE Enhanced Connection Complete (Peer address)
+    #   0x0c LE PHY Update Complete (Handle+Address)
+    #   0x0d LE Extended Advertising Report
+    #   0x14 LE Channel Selection Algorithm (Handle+Address)
+    # 0x03/0x07/0x0c were added after chunk-log evidence (blue_hydra_chunk.log)
+    # showed them merging a second device into an open chunk during concurrent
+    # connections (event-driven auto-connect keeps many devices connected at
+    # once), which discarded the chunk as multi-unique-address.
     LE_META_EVENT_CODE     = "3e".freeze
-    LE_META_START_SUBEVENT = /\(0x0[12d]\)/.freeze
+    LE_META_START_SUBEVENT = /\(0x(?:01|02|03|04|07|0a|0c|0d|14)\)/.freeze
 
     # name has been moved into the MGMT "Device Found" event in newer bluez
     MGMT_DEVICE_FOUND_RE   = /@ MGMT Event: .* \(0x0012\)/.freeze
+
+    # Matches an "...address: <MAC>" line (Address:/Peer address:/etc.), pulling
+    # out the MAC. Compiled once (used per chunk) instead of rebuilt each call.
+    ADDRESS_RE = /^\s*.*ddress: ((?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})/.freeze
+
+    # The all-zero BD_ADDR is a placeholder ("not set") - e.g. the resolvable-
+    # private-address fields of LE Connection Complete / Disconnect events are
+    # 00:00:00:00:00:00 when unused. It is never a real device address, so it
+    # must not count toward a chunk's address total; otherwise a single real
+    # device plus those zero fields looks like a multi-device chunk and is
+    # wrongly discarded as a missing start block. (See TODO on fuller
+    # resolvable/direct address handling.)
+    NULL_ADDRESS = "00:00:00:00:00:00".freeze
 
     # initialize with incoming (from btmon) and outgoing (to parser) queues
     def initialize(incoming_q, outgoing_q)
@@ -60,7 +90,7 @@ module BlueHydra
 
           # if we just got a new message shovel the working set into the
           # outgoing queue and reset it
-          address_lines = working_set.flatten.reject{|x| x =~ /Direct address/}.join("").scan(/^\s*.*ddress: ((?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})/).flatten
+          address_lines = working_set.flatten.reject{|x| x =~ /Direct address/}.join("").scan(ADDRESS_RE).flatten.reject{|a| a == NULL_ADDRESS}
           address_list  = address_lines.uniq
           address_count = address_list.count
 

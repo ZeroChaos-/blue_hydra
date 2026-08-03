@@ -26,10 +26,12 @@ describe BlueHydra::Chunker do
 
     nope1 = ["Bluetooth monitor ver 5.35\r\n"]
     nope2 = ["= New Index: 5C:C5:D4:11:33:79 (BR/EDR,USB,hci1)     2015-12-10 11:29:46.064195\r\n"]
-    nope3 = ["> HCI Event: Disconnect Complete (0x05) plen 4       2015-12-10 11:30:58.970878\r\n",
-             "        Status: Success (0x00)\r\n",
+    # Max Slots Change (0x1b) is address-bearing but not a chunk-start code.
+    # (Disconnect Complete 0x05 was here before but is now a start - see
+    # Chunker::HCI_EVENT_START_CODES.)
+    nope3 = ["> HCI Event: Max Slots Change (0x1b) plen 3          2015-12-10 11:30:58.970878\r\n",
              "        Handle: 3585\r\n",
-             "        Reason: Connection Terminated By Local Host (0x16)\r\n"]
+             "        Max slots: 5\r\n"]
 
     q1 = Queue.new
     q2 = Queue.new
@@ -153,19 +155,36 @@ describe BlueHydra::Chunker do
        "        Address: #{mac} (OUI AA-BB-CC)\r\n"]
     end
 
-    # a non-start block (Read Remote Supported Features, 0x0b) whose new-format
-    # line carries an address, so it merges into the current chunk and adds an
-    # address line
-    def remote_features(mac)
-      ["> HCI Event: Read Remote Supported Features (0x0b) plen 11   #2 2026-07-28 16:07:00.200000\r\n",
-       "        Status: Success (0x00)\r\n",
-       "        Handle: 256 Address: #{mac} (OUI AA-BB-CC)\r\n"]
+    # a NON-start address-bearing event (Max Slots Change, 0x1b) whose
+    # new-format line carries an address, so it merges into the current chunk
+    # and adds an address line. (The Read Remote Supported/Version/Extended
+    # Features events are now chunk starts - see HCI_EVENT_START_CODES - so they
+    # no longer merge; Max Slots Change is used here to still exercise merging.)
+    def merged_address_event(mac)
+      ["> HCI Event: Max Slots Change (0x1b) plen 3   #2 2026-07-28 16:07:00.200000\r\n",
+       "        Handle: 256 Address: #{mac} (OUI AA-BB-CC)\r\n",
+       "        Max slots: 5\r\n"]
     end
 
     # a start block (Command Complete, 0x0e) with no address line at all
     def no_address
       ["> HCI Event: Command Complete (0x0e) plen 4   #1 2026-07-28 16:07:00.100000\r\n",
        "        Some Field: 0x00\r\n"]
+    end
+
+    # an LE (Enhanced) Connection Complete-style message: carries the device's
+    # real Peer address plus the all-zero resolvable-private-address fields that
+    # used to be miscounted as a second device (the missing-start-block false
+    # positive fixed by rejecting NULL_ADDRESS)
+    def le_connection_complete(mac)
+      ["> HCI Event: LE Meta Event (0x3e) plen 31   #3 2026-07-28 16:07:00.300000\r\n",
+       "        LE Enhanced Connection Complete (0x0a)\r\n",
+       "        Status: Success (0x00)\r\n",
+       "        Handle: 2048\r\n",
+       "        Peer address type: Public (0x00)\r\n",
+       "        Peer address: #{mac} (OUI AA-BB-CC)\r\n",
+       "        Local resolvable private address: 00:00:00:00:00:00 (Non-Resolvable)\r\n",
+       "        Peer resolvable private address: 00:00:00:00:00:00 (Non-Resolvable)\r\n"]
     end
 
     def counter
@@ -193,7 +212,7 @@ describe BlueHydra::Chunker do
 
     it "processes and counts a same-MAC multi-line chunk without chunk-logging when debug is off" do
       before_count = counter
-      pushed = flush_chunk([inquiry("AA:AA:AA:AA:AA:AA"), remote_features("AA:AA:AA:AA:AA:AA")])
+      pushed = flush_chunk([inquiry("AA:AA:AA:AA:AA:AA"), merged_address_event("AA:AA:AA:AA:AA:AA")])
 
       expect(pushed.size).to eq(1)                       # still processed
       expect(counter - before_count).to eq(1)            # counted
@@ -205,7 +224,7 @@ describe BlueHydra::Chunker do
     it "chunk-logs a same-MAC multi-line chunk when chunker_debug is on (still processed and counted)" do
       BlueHydra.config["chunker_debug"] = true
       before_count = counter
-      pushed = flush_chunk([inquiry("AA:AA:AA:AA:AA:AA"), remote_features("AA:AA:AA:AA:AA:AA")])
+      pushed = flush_chunk([inquiry("AA:AA:AA:AA:AA:AA"), merged_address_event("AA:AA:AA:AA:AA:AA")])
 
       expect(pushed.size).to eq(1)                       # still processed
       expect(counter - before_count).to eq(1)            # counted
@@ -247,11 +266,23 @@ describe BlueHydra::Chunker do
       end
     end
 
+    context "a chunk whose only extra address is the all-zero resolvable private address" do
+      it "is processed as a single-address chunk, not discarded as multi-unique" do
+        before_unique = unique_counter
+        pushed = flush_chunk([le_connection_complete("AA:AA:AA:AA:AA:AA")])
+
+        expect(pushed.size).to eq(1)                     # processed, not discarded
+        expect(unique_counter - before_unique).to eq(0)  # NOT treated as multi-unique
+        expect(BlueHydra).not_to have_received(:send_event).with('blue_hydra', hash_including(key: 'bluehydra_chunk_2_address'))
+        expect(BlueHydra.logger).not_to have_received(:warn).with(/multiple address/)
+      end
+    end
+
     context "a chunk with more than one unique address (missing start block)" do
       it "counts, warns and discards but does NOT chunk-log when chunker_debug is off" do
         before_count  = counter
         before_unique = unique_counter
-        pushed = flush_chunk([inquiry("AA:AA:AA:AA:AA:AA"), remote_features("BB:BB:BB:BB:BB:BB")])
+        pushed = flush_chunk([inquiry("AA:AA:AA:AA:AA:AA"), merged_address_event("BB:BB:BB:BB:BB:BB")])
 
         expect(pushed).to be_empty                              # discarded
         expect(counter - before_count).to eq(1)                 # counted as multi-address-line
@@ -265,7 +296,7 @@ describe BlueHydra::Chunker do
         BlueHydra.config["chunker_debug"] = true
         before_count  = counter
         before_unique = unique_counter
-        pushed = flush_chunk([inquiry("AA:AA:AA:AA:AA:AA"), remote_features("BB:BB:BB:BB:BB:BB")])
+        pushed = flush_chunk([inquiry("AA:AA:AA:AA:AA:AA"), merged_address_event("BB:BB:BB:BB:BB:BB")])
 
         expect(pushed).to be_empty
         expect(counter - before_count).to eq(1)
@@ -273,6 +304,80 @@ describe BlueHydra::Chunker do
         expect(chunk_log).to have_received(:info).at_least(:once)  # chunk-logged in debug
         expect(BlueHydra.logger).to have_received(:warn).with(/multiple address/)  # warn is unconditional
         expect(BlueHydra).to have_received(:send_event).with('blue_hydra', hash_including(key: 'bluehydra_chunk_2_address'))
+      end
+    end
+
+    context "address-bearing response events start their own chunk (fix 2)" do
+      # Read Remote Version Complete (0x0c) - now a chunk-start code - carrying
+      # its own device address on the new-format Handle+Address line
+      def read_remote_version(mac)
+        ["> HCI Event: Read Remote Version Complete (0x0c) plen 8   #5 2026-07-28 16:07:00.500000\r\n",
+         "        Status: Success (0x00)\r\n",
+         "        Handle: 256 Address: #{mac} (OUI AA-BB-CC)\r\n",
+         "        LMP version: Bluetooth 5.4 (0x0d) - Subversion 1 (0x0001)\r\n"]
+      end
+
+      it "does not merge a different device's version read into the open chunk" do
+        before_unique = unique_counter
+        pushed = flush_chunk([inquiry("AA:AA:AA:AA:AA:AA"), read_remote_version("BB:BB:BB:BB:BB:BB")])
+
+        # each becomes its own single-address chunk instead of one discarded
+        # multi-unique chunk
+        expect(pushed.size).to eq(2)
+        expect(unique_counter - before_unique).to eq(0)
+        joined = pushed.map { |c| c.flatten.join }
+        expect(joined.any? { |c| c.include?("AA:AA:AA:AA:AA:AA") }).to eq(true)
+        expect(joined.any? { |c| c.include?("BB:BB:BB:BB:BB:BB") }).to eq(true)
+        expect(BlueHydra).not_to have_received(:send_event).with('blue_hydra', hash_including(key: 'bluehydra_chunk_2_address'))
+      end
+
+      it "recognizes the newly added address-bearing events as chunk starts" do
+        chunker = BlueHydra::Chunker.new(Queue.new, Queue.new)
+        expect(chunker.starting_chunk?(read_remote_version("AA:AA:AA:AA:AA:AA"))).to eq(true)    # 0x0c classic
+        expect(chunker.starting_chunk?(le_connection_complete("AA:AA:AA:AA:AA:AA"))).to eq(true) # 0x0a LE meta subevent
+        # a still-non-start address-bearing event stays merged (the safety net)
+        expect(chunker.starting_chunk?(merged_address_event("AA:AA:AA:AA:AA:AA"))).to eq(false)  # 0x1b Max Slots Change
+      end
+    end
+
+    context "LE link-management subevents start their own chunk (fix 3)" do
+      # These carry Handle+Address and interleave during concurrent connections
+      # (event-driven auto-connect keeps many devices connected at once). Chunk
+      # log evidence showed them merging a second device into an open chunk.
+      def le_connection_update(mac)
+        ["> HCI Event: LE Meta Event (0x3e) plen 10   #10 2026-07-31 11:49:54.700000\r\n",
+         "        LE Connection Update Complete (0x03)\r\n",
+         "        Handle: 2048 Address: #{mac} (OUI AA-BB-CC)\r\n"]
+      end
+
+      def le_data_length_change(mac)
+        ["> HCI Event: LE Meta Event (0x3e) plen 11   #11 2026-07-31 11:49:54.800000\r\n",
+         "        LE Data Length Change (0x07)\r\n",
+         "        Handle: 2048 Address: #{mac} (OUI AA-BB-CC)\r\n"]
+      end
+
+      def le_phy_update(mac)
+        ["> HCI Event: LE Meta Event (0x3e) plen 6   #12 2026-07-31 11:49:55.000000\r\n",
+         "        LE PHY Update Complete (0x0c)\r\n",
+         "        Handle: 2048 Address: #{mac} (OUI AA-BB-CC)\r\n"]
+      end
+
+      it "recognizes 0x03 / 0x07 / 0x0c LE meta subevents as chunk starts" do
+        chunker = BlueHydra::Chunker.new(Queue.new, Queue.new)
+        expect(chunker.starting_chunk?(le_connection_update("AA:AA:AA:AA:AA:AA"))).to eq(true) # 0x03
+        expect(chunker.starting_chunk?(le_data_length_change("AA:AA:AA:AA:AA:AA"))).to eq(true) # 0x07
+        expect(chunker.starting_chunk?(le_phy_update("AA:AA:AA:AA:AA:AA"))).to eq(true)         # 0x0c
+      end
+
+      it "does not merge a different device's link-management event into the open chunk" do
+        before_unique = unique_counter
+        pushed = flush_chunk([inquiry("AA:AA:AA:AA:AA:AA"), le_data_length_change("BB:BB:BB:BB:BB:BB")])
+
+        # each becomes its own single-address chunk instead of one discarded
+        # multi-unique chunk
+        expect(pushed.size).to eq(2)
+        expect(unique_counter - before_unique).to eq(0)
+        expect(BlueHydra).not_to have_received(:send_event).with('blue_hydra', hash_including(key: 'bluehydra_chunk_2_address'))
       end
     end
   end

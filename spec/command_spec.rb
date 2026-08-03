@@ -9,17 +9,18 @@ describe BlueHydra::Command do
   end
 end
 
-describe "hciconfig output parsing" do
-  it "returns a single mac" do
+describe "local adapter address enumeration (mgmt Read Controller Information)" do
+  it "returns an array of at most one mac address" do
     begin
-      expect(BlueHydra::EnumLocalAddr.call.count).to eq(1)
-    rescue NoMethodError => e
-      if e.message.match?(/undefined method [`']scan' for nil/)
-        #during testing we allow this to pass if there is no adapter
-        expect(1).to eq(1)
-      else
-        raise e
+      result = BlueHydra::EnumLocalAddr.call
+      expect(result).to be_an(Array)
+      expect(result.count).to be <= 1
+      if result.first
+        expect(result.first).to match(/\A(?:[0-9A-F]{2}:){5}[0-9A-F]{2}\z/)
       end
+    rescue BluezNotReadyError, MgmtSocketError, SystemCallError, IOError
+      # No usable Bluetooth adapter in the test environment; acceptable.
+      expect(1).to eq(1)
     end
   end
 end

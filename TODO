@@ -1,40 +1,296 @@
+Misc backlog / older notes
+--------------------------------------------------------------------------------
 calibrate range for sena dongle
-migrate away from dbus/test-discovery
 do we need to send status with aggressive_rssi?
 
 add in a passive le mode
 add in a passive classic mode
 when ubertooth is available, specifically detect inquiries
-add support for ubertooth index
 
-refactor pass & code cleanup
-extend tests a bit
-
-Some stuff to do
 * handle alt UUIDs which contain paren
 * rate limit incoming RSSIs to 1 per timeframe
-* Investigate duplicate classic_features_bitmaps...
-* catch bluez chunk start lines by number instead of randomly abbreviated header
-
-* add summary rake tasks to extract data from CLI after CUI is not running or from daemon mode service. 
-
-
-```
-W, [2016-01-27T15:51:44.838857 #18723]  WARN -- : 00:61:71:D0:E1:EF multiple values detected for classic_features_bitmap: ["0xbf 0xfe 0xcf 0xfe 0xdb 0xff 0x7b 0x87", "0x07 0x00 0x00 0x00 0x00 0x00 0x00 0x00", "0x000002a8"]. Using first value...
-```
-^^ this looks severely like we are missing a (most likely le) start block, because that looks like a classic features bitmap colliding with an le one.
+* add summary rake tasks to extract data from CLI after CUI is not running or
+  from daemon mode service.
 
 We should lookup 16 bit uuid's as they are assigned:
 - https://www.bluetooth.com/specifications/assigned-numbers/16-bit-uuids-for-members
 - https://www.bluetooth.com/specifications/assigned-numbers/16-bit-uuids-for-sdos
-
 We should look up more things which are assigned
 - https://www.bluetooth.com/specifications/assigned-numbers
+Some le uuids: https://gitlab.com/sdalu/ruby-ble
 
-Some le uuids
-https://gitlab.com/sdalu/ruby-ble
 
-Style cleanup (cosmetic, fix later)
-* runner.rb (and other Pulse.send_event call sites) - normalize hash-key spacing: `severity:'ERROR'`/`title:'...'` (no space after colon) vs the spaced `severity: 'FATAL'` used in blue_hydra.rb and command.rb
-* command.rb - execute3 method body is not indented under its `begin` (begin, body, and rescue sit at the same indent level)
-* pulse.rb - `if BlueHydra.pulse ||  BlueHydra.pulse_debug` has a double space after `||` (in both reset and hard_reset)
+================================================================================
+Completed (removed from the active list; see git history for full notes)
+================================================================================
+The Bluetooth stack was moved off the BlueZ userspace tools onto the kernel
+mgmt API + raw HCI/L2CAP sockets. Done and verified on-device (2026-07..08):
+
+- LE info scan "Command Disallowed" fixed: replaced hcitool leinfo + dbus
+  test-discovery with mgmt Start Discovery (reader thread keeps it continuous)
+  and mgmt Add Device auto-connect; LE address-type brute force removed (peer
+  type carried on the queue entry).
+- Chunker missing-start-block fixes: address-bearing response events made chunk
+  starts (HCI 0x05/0x0b/0x0c/0x23; LE meta 0x03/0x04/0x07/0x0a/0x0c/0x14) +
+  all-zero BD_ADDR ignored. Multi-unique-address discards no longer observed.
+- Event-driven auto-connect: phased SCAN (discovery on, add devices) / CONNECT
+  (discovery off, drain mgmt Device Connected/Disconnected/Connect Failed),
+  scan-phase pruning, DISCOVERY_OFF_BUDGET bound. Retired the TTL model
+  (discovery_wait / drain_auto_connect / sweep_auto_connect / AUTO_CONNECT_TTL /
+  discovery_wanted).
+- Native L2CAP reachability probe (BlueHydra::L2Ping) replaced the l2ping
+  shell-out; validated on-device (reachable -> ACL up ~0.36s; unreachable -> 4s
+  timeout -> cancel).
+- Classic info/l2ping response times measured; DISCOVERY_OFF_BUDGET = 6s
+  confirmed adequate (dominant bounded op is the 4s probe).
+- LE remote version interrogation: BlueHydra::HciCommand, a dedicated raw-HCI
+  reader thread, issues Read Remote Version Information on each LE Connection
+  Complete (the kernel auto-reads LE features but never the version). On-device:
+  version reads 1:1 with commands; versions populate in seconds. Also fixed the
+  parser Handle+Address drop bug and the LE-version-mislabeled-as-classic bug.
+- Pairing/PIN suppression: mgmt Set Bondable(off) + IO Capability(NoInputNoOutput)
+  and auto-reject of PIN/confirm/passkey request events.
+- Removed the dead bluetoothd/dbus recovery (bluetoothdDbusError, the
+  bluetoothd_errors threading) and the dead scanner_status[:test_discovery]
+  assignment; hciconfig/bluetoothctl/test-discovery no longer used. README deps
+  trimmed accordingly.
+
+
+================================================================================
+Open items
+================================================================================
+
+--------------------------------------------------------------------------------
+1. Add a --test mode / self-check for btmon message receipt and parsing
+--------------------------------------------------------------------------------
+- Motivation: btmon's output format keeps changing across BlueZ versions
+  (combined "Handle: N Address: MAC" lines, added #packet numbers, color codes,
+  abbreviated/renamed event headers, moved fields). Each change silently breaks
+  a filter/chunk/parse assumption and we notice late. A built-in self-check
+  would catch format drift immediately.
+- Proposal: a "--test" flag to bin/blue_hydra that runs an end-to-end check
+  verifying every expected btmon message type is (a) received, (b) passes the
+  enqueue filter, (c) chunked into a single-address chunk, (d) parsed into the
+  expected attribute(s). Define a manifest of message types we rely on and the
+  attribute each should yield, e.g.:
+    * Extended Inquiry Result (0x2f)          -> address, classic_mode, name
+    * LE Extended Advertising Report (0x0d)   -> address, le_mode, le_rssi, uuids
+    * Read Remote Version Info Complete (0x0c)-> lmp_version
+    * Read Remote Supported/Extended Features (0x0b/0x23) -> features_bitmap
+    * Remote Name Req Complete (0x07)         -> name
+    * Connect Complete (0x03)                 -> address/handle mapping
+- Two run modes: fixture mode (feed curated spec/fixtures captures through the
+  real BtmonHandler -> Chunker -> Parser and assert the manifest; CI-friendly)
+  and live mode (real adapter + known reference devices; document the bench).
+- Output: pass/fail per message type, non-zero exit on received-but-unparsed or
+  never-received, so it can gate deploys when a new btmon shifts the format.
+  Complements the existing chunker/auto-connect health counters (runtime drift)
+  by surfacing drift on demand.
+
+--------------------------------------------------------------------------------
+2. Optional: mgmt discovery filter (SetDiscoveryFilter) to cut noise
+--------------------------------------------------------------------------------
+- Continuous discovery works (reader-thread restart keeps it alive). Refinement:
+  set a mgmt discovery filter (RSSI / UUID), the way bluetoothctl does, to cut
+  advertising-report volume the pipeline has to process. Low priority; measure
+  the processing-speed benefit before implementing.
+
+--------------------------------------------------------------------------------
+3. Better address/handle attribution (resolvable/direct address + handle map)
+--------------------------------------------------------------------------------
+- (a) Resolvable-private / Direct address handling. The chunker's address
+  extraction rejects only "Direct address" lines and the all-zero BD_ADDR. But
+  "Local/Peer resolvable private address" and "Direct address" fields can carry
+  REAL, non-zero addresses (RPA privacy, directed advertising). Today a non-zero
+  RPA is counted as a separate device (-> multi-unique -> discarded) and a real
+  Direct address is dropped. Decide, per field, whether it identifies the same
+  device (ignore for grouping) or a different one, and whether to record it.
+  Needs a capture with non-zero RPA / directed adv to design against.
+- (b) Handle map. Some events carry only "Handle: N" (older btmon, or events
+  with no inline Address). Address-bearing events are chunk starts on the
+  assumption the new format puts "Handle: N Address: MAC" on the line; where an
+  event has a handle but NO inline address it becomes a zero-address chunk and
+  is dropped. Maintain a handle -> address map (populated from Connect Complete /
+  (Enhanced) LE Connection Complete, cleared on Disconnect Complete) so
+  handle-only events attribute to the right device. Note: BlueHydra::HciCommand
+  already parses the handle out of LE Connection Complete; that parse could feed
+  a shared map (also useful for item 4 and item 12).
+- Both are correctness/robustness items, most impactful under concurrent
+  multi-device processing. Validate on-device with the relevant captures.
+
+--------------------------------------------------------------------------------
+4. Replace the classic info scan (hcitool info) with our own implementation
+--------------------------------------------------------------------------------
+- Context: the LE info scan is on mgmt Add Device auto-connect and l2ping is the
+  native L2CAP probe, so `hcitool info` is the last external info-gathering
+  command. mgmt has no non-invasive classic connect-and-read primitive (Pair
+  Device bonds), and classic devices do not advertise, so they cannot be
+  background auto-connected - the classic path must actively page.
+- Goal: read classic remote info ourselves. Reuse the native L2CAP paging: once
+  the ACL link is up (mgmt Device Connected, BR/EDR), issue over a raw HCI
+  socket the same reads hcitool info performs - Read Remote Version Information
+  (0x0c), Read Remote Supported/Extended Features (0x0b/0x23), Remote Name
+  Request (0x07) - keyed on the connection handle, then disconnect. btmon already
+  captures those events and the parser already handles them; this only changes
+  who issues the reads. BlueHydra::HciCommand already does exactly this pattern
+  for LE Read Remote Version and is the natural home to extend.
+- Open questions (hardware-only): obtaining/tracking the ACL handle (overlaps
+  item 3b); whether Read Remote * on a handle we did not create via HCI is
+  allowed when the link came up via an L2CAP socket; sequencing so reads finish
+  before the link drops. Confirm on a classic device that completes
+  name+version+features. If intractable, keep hcitool info as the fallback.
+
+--------------------------------------------------------------------------------
+5. Remove/replace any remaining external bluez utilities (do it ourselves)
+--------------------------------------------------------------------------------
+- Goal: audit every remaining shell-out to a BlueZ/bluetooth userspace tool and
+  replace it with a direct kernel-socket (mgmt / raw HCI / L2CAP) implementation,
+  so blue_hydra depends only on the kernel, not the deprecated, version-drifting
+  BlueZ tools (a recurring source of parser churn).
+- Already removed: test-discovery (dbus), hciconfig, bluetoothctl, l2ping,
+  hcitool leinfo.
+- Remaining: `hcitool info` (item 4), and any other Command.execute* call sites
+  invoking hcitool/btmgmt/etc. Grep the tree and enumerate. Keep bin/rfkill-reset
+  (kernel rfkill recovery, not a BlueZ tool). btmon itself stays (it is the
+  monitor source). Track each utility as its own sub-item as it is removed.
+
+--------------------------------------------------------------------------------
+6. Implement GATT service scanning
+--------------------------------------------------------------------------------
+- Goal: for LE devices, after connecting (mgmt auto-connect path), walk the GATT
+  database - primary services, characteristics, descriptors - to enrich device
+  fingerprints beyond advertising data + LMP version/features.
+- Sketch: over the ATT L2CAP channel (fixed CID 0x0004), issue ATT Read By Group
+  Type (primary services), Read By Type (characteristics), Find Information
+  (descriptors); collect UUIDs and map well-known 16-bit UUIDs (ties into the
+  assigned-16-bit-UUID lookup note up top). Small ATT client on an L2CAP socket
+  (own class, reuse the socket-lifecycle patterns; not on Mgmt).
+- Coordination: connects LE devices, so it must cooperate with the SCAN/CONNECT
+  phasing (connect during a CONNECT window / discovery off) and respect the
+  discovery-off budget - a full GATT walk may exceed a version read, so scope how
+  much of the DB to fetch per connection / spread across connections.
+- Storage: choose which GATT attributes to persist (new Device fields); all
+  writes in the result thread (DB rule). Validate on a known GATT peripheral.
+
+--------------------------------------------------------------------------------
+7. Replace DataMapper with sqlite directly (or a faster maintained gem)
+--------------------------------------------------------------------------------
+- Context: blue_hydra uses DataMapper (long unmaintained) as its ORM over a
+  SQLite file; it is a performance/maintenance liability and the single-writer
+  result-thread DB rule partly works around its locking.
+- Goal: replace with either the sqlite3 gem + hand-written SQL, or a maintained
+  toolkit that reads/writes the SAME on-disk SQLite file (Sequel is the strongest
+  candidate). MUST preserve the existing file format so existing DBs keep working.
+- Scope: enumerate DataMapper usage (BlueHydra::Device + any others, custom
+  properties/validations, sync-to-pulse queries, migrations/auto_upgrade); map
+  each to the replacement; preserve result-thread-only writes and equivalent
+  query behavior (l2ping-candidate query, last_seen windows). Benchmark
+  before/after. Large, cross-cutting - schedule alone, gate behind the suite.
+
+--------------------------------------------------------------------------------
+8. Parallelize classic info scans and l2ping/reachability probes (cap 5 total)
+--------------------------------------------------------------------------------
+- Context: the discovery thread drains the classic info_scan_queue and the
+  l2ping_queue strictly one connection at a time, each in a discovery-off window,
+  serializing the slowest part of the loop.
+- Goal: allow multiple classic connects in flight, hard cap of 5 simultaneous
+  operations TOTAL - a single COMBINED limit across classic info scans AND
+  reachability probes (at most 5 in flight counting both kinds, NOT 5 of each).
+- Sketch: a bounded worker pool pulling from both queues, up to 5 at once. The
+  native L2CAP probe is already non-blocking (connect_nonblock + select) so
+  probes can be multiplexed on one thread; classic hcitool info (until item 4
+  replaces it) is a blocking subprocess needing real threads up to the cap.
+- Constraints: DB rule holds (workers only run connects; btmon captures data,
+  parsed later in the result thread). With N concurrent ops the discovery-off
+  window is bounded by the slowest of the batch, not the sum - re-derive the
+  budget accounting for the cap. Must still cooperate with the SCAN/CONNECT
+  phasing and disable_scan_before_connect. Cap (5) is a named, tunable, combined
+  constant. Use mgmt Device Connected/Disconnected to track completion for early
+  per-device teardown. Sequence after items 4 (classic-info rework) land.
+
+--------------------------------------------------------------------------------
+9. Success-gate info/leinfo scan timing (don't rate-limit before a success)
+--------------------------------------------------------------------------------
+- Problem: push_to_queue rate-limits re-scans using query_history[mode], stamped
+  when a scan is ENQUEUED (an attempt), not when it SUCCEEDS. A device we have
+  never successfully scanned still waits the full info_scan_rate (default 600s)
+  between attempts even though we have no data for it.
+- Desired: do NOT block a new scan by info_scan_rate before that device's first
+  SUCCESS; keep retrying (subject to a minimum floor). Start the info_scan_rate
+  backoff only AFTER a success (gate on last-SUCCESS, not last-attempt). Keep a
+  minimum-interval floor but reduce it from 45s to 15s (named constant; update
+  the validation floor in blue_hydra.rb, currently 45).
+- Design: define "success" per mode (leinfo -> lmp_version/features populated;
+  classic info -> name/features/version). Known in the RESULT thread when
+  parsing; record last-success there in the in-memory query_history (no DB off
+  the result thread). Gate becomes: enqueue if (never succeeded AND now -
+  last_attempt >= MIN_INFO_SCAN_INTERVAL) OR (now - last_success >=
+  info_scan_rate). Interacts with the event-driven flow: a connected-but-no-
+  version case should count as not-yet-success and retry sooner.
+
+--------------------------------------------------------------------------------
+10. Lighter kernel auto-connect list clear (mgmt Remove-all + startup clear)
+--------------------------------------------------------------------------------
+- Current: clear_auto_connect empties the list at the end of each CONNECT phase,
+  and Runner#stop hci_resets (Set Powered off/on) before closing the mgmt socket,
+  which clears the kernel auto-connect list and drops connections on clean exit.
+  The per-cycle hci_reset at discovery start also clears it. So a clean shutdown
+  is covered; the gap is a CRASH leaving stale entries the kernel keeps trying
+  to auto-connect, lingering into the next run.
+- Refinement (optional, cleaner than a power-cycle just to clear the list):
+    1. A BlueHydra::Mgmt helper issuing mgmt Remove Device with the all-zero
+       BDADDR (00:00:00:00:00:00, addr_type 0x00) = "remove ALL" - one command,
+       no power-cycle.
+    2. Call it once at startup to drop stale entries from a prior crashed run.
+    3. Optionally use it in Runner#stop instead of the shutdown hci_reset if the
+       full power-cycle proves heavier than needed just to clear the list.
+- Constraints: discovery thread owns auto_connect_list; do removal there / via
+  the mgmt instance. No DB access. Verify with btmgmt that the list is empty
+  after exit and after a startup clear following a simulated crash.
+
+--------------------------------------------------------------------------------
+11. Improve the drain_connection_events workflow (stop blunt-clearing the queue)
+--------------------------------------------------------------------------------
+- Background: process_connection_events prunes the auto-connect list on mgmt
+  Device Disconnected/Connect Failed - the point of the event-driven design is
+  to remove a device the moment its connect/interrogate/disconnect cycle
+  completes, so the kernel's ACTION_AUTO_CONNECT stops re-connecting it.
+- Wart: connect_phase starts with drain_connection_events, a blunt
+  connection_events.clear. Now that scan_phase also processes events, that clear
+  THROWS AWAY Disconnected/Failed events that landed at the scan/connect boundary
+  for devices we still track, delaying their removal until clear_auto_connect at
+  phase end - the churn the design is meant to avoid.
+- Not-obviously-safe to just delete the clear: addresses recur across cycles, so
+  a stale :connected from a prior cycle could be mis-attributed to a re-added
+  entry for the same address. process_connection_events already ignores
+  untracked addresses (next unless entry), so stale events for gone devices are
+  no-ops - same-address recurrence is the case to handle.
+- Direction: drop the blunt clear and rely on the existing filter PLUS a
+  per-cycle guard against same-address staleness (stamp entries with an
+  added_at/generation token and ignore events enqueued before the entry was
+  (re-)added); or a targeted purge of only untracked-address events. Process
+  events continuously (scan AND connect phases) so the queue never needs wiping.
+
+--------------------------------------------------------------------------------
+12. Rate-limit LE Read Remote Version to the info-scan cadence
+--------------------------------------------------------------------------------
+- Background: BlueHydra::HciCommand issues a Read Remote Version on EVERY LE
+  Connection Complete. That is what populated LE versions, and it works, but it
+  fires far more than needed: ACTION_AUTO_CONNECT reconnects a device on each
+  re-advertise and info_scan_rate re-queues it, so a device connects many times
+  per run (observed: 11 devices, 50 connections, 48 version reads). Once we have
+  a good version, re-reading on every reconnect is wasted HCI traffic in the
+  already-tiny connected window.
+- Goal: fire the version read no more often than the info-scan cadence for that
+  device - gate it like an info scan (info_scan_rate + item 9 success-gating)
+  instead of once per connection.
+- Design: gate per device (by address), not per handle. The hard part is the
+  thread boundary - HciCommand runs on its own raw-HCI thread, only knows the
+  HANDLE, and must not touch the DB. Preferred: parse the peer address out of
+  the LE (Enhanced) Connection Complete event (offsets after the handle) and
+  consult a small in-memory address -> last-version-read map (shares the handle
+  map of item 3b). PRESERVE THE RETRY BENEFIT: only start the cooldown once a
+  device has a GOOD version (real LMP, not 0x00/0xff); until then keep retrying
+  on each reconnect (that is what rescues flaky devices whose read races the
+  disconnect). Consider folding info scan / l2ping / version read into one shared
+  per-device scan cadence (with item 9).

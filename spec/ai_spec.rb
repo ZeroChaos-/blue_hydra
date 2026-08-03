@@ -674,9 +674,12 @@ describe "BlueHydra::Chunker dispatch" do
   end
 
   def nonstarting_msg(addr)
+    # Max Slots Change (0x1b) is address-bearing but NOT a chunk-start code, so
+    # it merges into the current working set. (Disconnect Complete 0x05 used to
+    # be used here but is now a start code - see Chunker::HCI_EVENT_START_CODES.)
     [
-      "> HCI Event: Disconnect Complete (0x05) plen 4       2015-12-10 11:30:58.970878\r\n",
-      "        Address: #{addr} (Apple)\r\n"
+      "> HCI Event: Max Slots Change (0x1b) plen 3          2015-12-10 11:30:58.970878\r\n",
+      "        Handle: 256 Address: #{addr} (Apple)\r\n"
     ]
   end
 
@@ -785,23 +788,280 @@ describe "BlueHydra::Runner helpers" do
   it "push_to_queue enqueues an le info scan" do
     runner = BlueHydra::Runner.new
     runner.query_history = {}
-    runner.info_scan_queue = Queue.new
+    runner.le_info_scan_queue = Queue.new
     runner.push_to_queue(:le, "AB:CD:EF:44:55:66")
-    item = runner.info_scan_queue.pop
+    item = runner.le_info_scan_queue.pop
     expect(item[:command]).to eq(:leinfo)
   end
 
   it "push_to_queue ignores the local adapter address" do
     runner = BlueHydra::Runner.new
     runner.query_history = {}
-    runner.info_scan_queue = Queue.new
+    runner.le_info_scan_queue = Queue.new
     runner.push_to_queue(:le, BlueHydra::LOCAL_ADAPTER_ADDRESS)
-    expect(runner.info_scan_queue.empty?).to eq(true)
+    expect(runner.le_info_scan_queue.empty?).to eq(true)
+  end
+
+  it "push_to_queue carries the le address type on the queue entry" do
+    runner = BlueHydra::Runner.new
+    runner.query_history = {}
+    runner.le_info_scan_queue = Queue.new
+    runner.push_to_queue(:le, "AB:CD:EF:44:55:77", "Random")
+    item = runner.le_info_scan_queue.pop
+    expect(item[:le_address_type]).to eq("Random")
+  end
+
+  it "service_le_info_scans drains the le queue into the auto-connect list" do
+    runner = BlueHydra::Runner.new
+    runner.auto_connect_list = {}
+    runner.le_pending = {}
+    runner.le_info_scan_queue = Queue.new
+    fake_mgmt = double("mgmt")
+    allow(fake_mgmt).to receive(:add_device).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+    runner.mgmt = fake_mgmt
+
+    runner.le_info_scan_queue.push({ command: :leinfo, address: "AA:BB:CC:DD:EE:50", le_address_type: "Public" })
+    runner.service_le_info_scans
+
+    expect(runner.le_info_scan_queue.empty?).to eq(true)
+    expect(runner.auto_connect_list).to have_key("AA:BB:CC:DD:EE:50")
+    expect(fake_mgmt).to have_received(:add_device).with("AA:BB:CC:DD:EE:50", BlueHydra::Mgmt::LE_PUBLIC)
+  end
+
+  it "request_leinfo adds an le device via mgmt when a slot is free" do
+    runner = BlueHydra::Runner.new
+    runner.auto_connect_list = {}
+    runner.le_pending = {}
+    fake_mgmt = double("mgmt")
+    allow(fake_mgmt).to receive(:add_device).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+    runner.mgmt = fake_mgmt
+
+    runner.request_leinfo("AA:BB:CC:DD:EE:40", "Random")
+
+    expect(runner.auto_connect_list).to have_key("AA:BB:CC:DD:EE:40")
+    expect(runner.le_pending).to be_empty
+    expect(fake_mgmt).to have_received(:add_device).with("AA:BB:CC:DD:EE:40", BlueHydra::Mgmt::LE_RANDOM)
+  end
+
+  it "request_leinfo holds a device in le_pending when full and never loses it" do
+    runner = BlueHydra::Runner.new
+    runner.le_pending = {}
+    fake_mgmt = double("mgmt")
+    allow(fake_mgmt).to receive(:add_device).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+    allow(fake_mgmt).to receive(:remove_device).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+    runner.mgmt = fake_mgmt
+    # fill all 32 slots with fresh (non-expired) entries
+    runner.auto_connect_list = {}
+    32.times do |i|
+      runner.auto_connect_list["AA:BB:CC:DD:EE:%02X" % i] =
+        { address_type: BlueHydra::Mgmt::LE_RANDOM, added_at: Time.now }
+    end
+
+    runner.request_leinfo("BB:BB:CC:DD:EE:FF", "Public")
+
+    # held, not dropped: list still at cap, request waiting in le_pending
+    expect(runner.auto_connect_list.size).to eq(32)
+    expect(runner.auto_connect_list).not_to have_key("BB:BB:CC:DD:EE:FF")
+    expect(runner.le_pending).to have_key("BB:BB:CC:DD:EE:FF")
+
+    # free a slot (event-driven removal in the real flow), then fill promotes
+    freed = runner.auto_connect_list.keys.first
+    runner.auto_connect_list.delete(freed)
+    runner.fill_auto_connect
+
+    expect(runner.auto_connect_list).not_to have_key(freed)            # slot freed
+    expect(runner.auto_connect_list).to have_key("BB:BB:CC:DD:EE:FF")  # pending promoted
+    expect(runner.le_pending).to be_empty                             # nothing lost
+  end
+
+  # Helper: a fake mgmt exposing a real connection_events Queue plus the
+  # add/remove/stop stubs the auto-connect flow uses.
+  def fake_mgmt_with_events
+    events = Queue.new
+    m = double("mgmt")
+    allow(m).to receive(:connection_events).and_return(events)
+    allow(m).to receive(:add_device).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+    allow(m).to receive(:remove_device).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+    allow(m).to receive(:stop_discovery).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+    [m, events]
+  end
+
+  it "process_connection_events removes a device immediately on Device Disconnected" do
+    runner = BlueHydra::Runner.new
+    fake_mgmt, events = fake_mgmt_with_events
+    runner.mgmt = fake_mgmt
+    runner.auto_connect_list = {
+      "AA:BB:CC:DD:EE:70" => { address_type: BlueHydra::Mgmt::LE_RANDOM, added_at: Time.now, connected: true }
+    }
+
+    events << { type: :disconnected, address: "AA:BB:CC:DD:EE:70" }
+    runner.process_connection_events
+
+    expect(runner.auto_connect_list).to be_empty
+    expect(fake_mgmt).to have_received(:remove_device).with("AA:BB:CC:DD:EE:70", BlueHydra::Mgmt::LE_RANDOM)
+  end
+
+  it "process_connection_events removes and counts a Connect Failed" do
+    BlueHydra::CliUserInterfaceTracker.auto_connect_failed_count = 0
+    runner = BlueHydra::Runner.new
+    fake_mgmt, events = fake_mgmt_with_events
+    runner.mgmt = fake_mgmt
+    runner.auto_connect_list = {
+      "AA:BB:CC:DD:EE:71" => { address_type: BlueHydra::Mgmt::LE_PUBLIC, added_at: Time.now, connected: false }
+    }
+
+    events << { type: :failed, address: "AA:BB:CC:DD:EE:71" }
+    runner.process_connection_events
+
+    expect(runner.auto_connect_list).to be_empty
+    expect(BlueHydra::CliUserInterfaceTracker.auto_connect_failed_count).to eq(1)
+  end
+
+  it "process_connection_events marks a device connected and keeps it pending" do
+    BlueHydra::CliUserInterfaceTracker.auto_connect_connected_count = 0
+    runner = BlueHydra::Runner.new
+    fake_mgmt, events = fake_mgmt_with_events
+    runner.mgmt = fake_mgmt
+    runner.auto_connect_list = {
+      "AA:BB:CC:DD:EE:72" => { address_type: BlueHydra::Mgmt::LE_RANDOM, added_at: Time.now, connected: false }
+    }
+
+    events << { type: :connected, address: "AA:BB:CC:DD:EE:72" }
+    runner.process_connection_events
+
+    expect(runner.auto_connect_list["AA:BB:CC:DD:EE:72"][:connected]).to eq(true)
+    expect(runner.auto_connect_list).to have_key("AA:BB:CC:DD:EE:72") # still pending
+    expect(BlueHydra::CliUserInterfaceTracker.auto_connect_connected_count).to eq(1)
+  end
+
+  it "process_connection_events ignores events for untracked addresses" do
+    runner = BlueHydra::Runner.new
+    fake_mgmt, events = fake_mgmt_with_events
+    runner.mgmt = fake_mgmt
+    runner.auto_connect_list = {}
+
+    events << { type: :disconnected, address: "FF:FF:FF:FF:FF:FF" }
+    runner.process_connection_events
+
+    expect(fake_mgmt).not_to have_received(:remove_device)
+  end
+
+  it "connect_phase suppresses discovery and resumes once the pending set empties" do
+    runner = BlueHydra::Runner.new
+    fake_mgmt, _events = fake_mgmt_with_events
+    runner.mgmt = fake_mgmt
+    runner.auto_connect_list = {
+      "AA:BB:CC:DD:EE:73" => { address_type: BlueHydra::Mgmt::LE_RANDOM, added_at: Time.now, connected: false }
+    }
+    # simulate the device disconnecting on the first processing pass
+    allow(runner).to receive(:process_connection_events) { runner.auto_connect_list.clear }
+
+    runner.connect_phase
+
+    expect(fake_mgmt).to have_received(:stop_discovery) # discovery suppressed for the connect window
+    expect(runner.auto_connect_list).to be_empty
+  end
+
+  it "connect_phase clears still-pending devices when the discovery-off budget elapses" do
+    stub_const("BlueHydra::Runner::DISCOVERY_OFF_BUDGET", 0)
+    runner = BlueHydra::Runner.new
+    fake_mgmt, _events = fake_mgmt_with_events
+    runner.mgmt = fake_mgmt
+    runner.auto_connect_list = {
+      "AA:BB:CC:DD:EE:74" => { address_type: BlueHydra::Mgmt::LE_PUBLIC, added_at: Time.now, connected: false }
+    }
+    # no events arrive; the device never connects or disconnects
+
+    runner.connect_phase
+
+    expect(runner.auto_connect_list).to be_empty
+    expect(fake_mgmt).to have_received(:remove_device).with("AA:BB:CC:DD:EE:74", BlueHydra::Mgmt::LE_PUBLIC)
+  end
+
+  it "resume_discovery_if_over_budget yields to discovery once the off budget is exceeded" do
+    runner = BlueHydra::Runner.new
+    fake_mgmt = double("mgmt")
+    allow(fake_mgmt).to receive(:start_discovery).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+    runner.mgmt = fake_mgmt
+    allow(runner).to receive(:sleep) # skip the resume-window delay
+
+    old = Time.now - (BlueHydra::Runner::DISCOVERY_OFF_BUDGET + 1)
+    new_off = runner.resume_discovery_if_over_budget(old)
+
+    expect(fake_mgmt).to have_received(:start_discovery)
+    expect(new_off).to be > old
+  end
+
+  it "resume_discovery_if_over_budget does not yield when under the off budget" do
+    runner = BlueHydra::Runner.new
+    fake_mgmt = double("mgmt")
+    allow(fake_mgmt).to receive(:start_discovery)
+    runner.mgmt = fake_mgmt
+
+    recent = Time.now
+    result = runner.resume_discovery_if_over_budget(recent)
+
+    expect(fake_mgmt).not_to have_received(:start_discovery)
+    expect(result).to eq(recent)
+  end
+
+  it "scan_phase adds pending devices up to CONNECT_PENDING_LIMIT then stops" do
+    stub_const("BlueHydra::Runner::CONNECT_PENDING_LIMIT", 2)
+    runner = BlueHydra::Runner.new
+    fake_mgmt, _events = fake_mgmt_with_events
+    runner.mgmt = fake_mgmt
+    runner.auto_connect_list = {}
+    runner.le_info_scan_queue = Queue.new
+    runner.le_pending = {
+      "AA:BB:CC:DD:EE:80" => "Public",
+      "AA:BB:CC:DD:EE:81" => "Random",
+      "AA:BB:CC:DD:EE:82" => "Public"
+    }
+
+    runner.scan_phase(5)
+
+    expect(runner.auto_connect_list.size).to eq(2)   # capped at the pending limit
+    expect(runner.le_pending.size).to eq(1)          # remainder held, never dropped
+  end
+
+  it "scan_with_reset_retry does not reset when the connect succeeds" do
+    runner = BlueHydra::Runner.new
+    expect(runner).not_to receive(:hci_reset)
+
+    calls  = 0
+    result = runner.scan_with_reset_retry { calls += 1; nil } # nil stderr == success
+
+    expect(calls).to eq(1)
+    expect(result).to be_nil
+  end
+
+  it "scan_with_reset_retry resets and retries once on a reset-worthy connect error" do
+    runner = BlueHydra::Runner.new
+    allow(runner).to receive(:hci_reset)
+
+    results = ["Could not create connection: Input/output error", nil]
+    calls   = 0
+    final   = runner.scan_with_reset_retry { r = results[calls]; calls += 1; r }
+
+    expect(runner).to have_received(:hci_reset).once
+    expect(calls).to eq(2)      # original attempt + one retry
+    expect(final).to be_nil     # retry succeeded
+  end
+
+  it "scan_with_reset_retry does not reset for an unreachable device (no route to host)" do
+    runner = BlueHydra::Runner.new
+    expect(runner).not_to receive(:hci_reset)
+
+    calls = 0
+    final = runner.scan_with_reset_retry { calls += 1; "connect: No route to host" }
+
+    expect(calls).to eq(1)      # not reset-worthy, no retry
+    expect(final).to match(/No route to host/)
   end
 
   it "reports a status hash for its queues and threads" do
     runner = BlueHydra::Runner.new
-    [:raw_queue, :chunk_queue, :result_queue, :info_scan_queue, :l2ping_queue].each do |q|
+    [:raw_queue, :chunk_queue, :result_queue, :info_scan_queue, :le_info_scan_queue, :l2ping_queue].each do |q|
       runner.send("#{q}=", Queue.new)
     end
     worker = Thread.new { sleep 2 }
@@ -824,7 +1084,7 @@ describe BlueHydra::CliUserInterface do
   class CuiFakeRunner
     attr_accessor :cui_status, :scanner_status, :result_queue,
                   :info_scan_queue, :l2ping_queue, :query_history,
-                  :processing_speed, :stunned
+                  :processing_speed, :stunned, :mgmt
 
     def initialize
       @cui_status       = {}
@@ -835,6 +1095,7 @@ describe BlueHydra::CliUserInterface do
       @query_history    = {}
       @processing_speed = 1.0
       @stunned          = false
+      @mgmt             = nil # matches a real Runner before discovery starts
     end
   end
 
@@ -984,6 +1245,37 @@ describe BlueHydra::CliUserInterface do
       cui.render_cui(40, :address, "ascending", printable_keys.dup, :disabled)
     end
     BlueHydra.demo_mode = original
+  end
+
+  describe "VERS is labeled from the device's known transport" do
+    # push one chunk through the tracker; chunk_first_line drives its le/classic
+    # detection (the post-shift first line), attrs supplies parsed values.
+    def track(runner, chunk_first_line, attrs, address)
+      t = BlueHydra::CliUserInterfaceTracker.new(runner, [[chunk_first_line]], attrs, address)
+      t.update_cui_status
+      t
+    end
+
+    it "labels a version read on an LE device as LEx.x (not CLx.x)" do
+      runner = CuiFakeRunner.new
+      addr = "AA:BB:CC:DD:EE:90"
+      # first seen via LE advertising (no version) -> records :le, shows BTLE
+      track(runner, "      LE Extended Advertising Report (0x0d)", { address: [addr] }, addr)
+      # then a version read - transport-agnostic chunk that parses as classic
+      t = track(runner, "        Status: Success (0x00)",
+                { address: [addr], lmp_version: ["Bluetooth 6.0 (0x0e) - Subversion 1"] }, addr)
+      expect(runner.cui_status[t.uuid][:vers]).to eq("LE6.0")
+    end
+
+    it "labels a version read on a classic-only device as CLx.x" do
+      runner = CuiFakeRunner.new
+      addr = "AA:BB:CC:DD:EE:91"
+      # first seen via classic (no version) -> records :classic
+      track(runner, "        Page: 1/1", { address: [addr] }, addr)
+      t = track(runner, "        Status: Success (0x00)",
+                { address: [addr], lmp_version: ["Bluetooth 5.2 (0x0b) - Subversion 1"] }, addr)
+      expect(runner.cui_status[t.uuid][:vers]).to eq("CL5.2")
+    end
   end
 end
 

@@ -12,9 +12,6 @@ Ensure that the following packages are installed:
 
 ```
 bluez
-bluez-test-scripts
-python3-bluez
-python3-dbus
 ubertooth # where applicable
 sqlite3
 libsqlite3-dev
@@ -22,9 +19,15 @@ libsqlite3-dev
 
 If your chosen distro is still on bluez 4 please choose a more up to date distro.  Bluez 5 was released in 2012 and is required.
 
+BlueHydra now drives discovery, resets, and connections through the kernel
+Bluetooth management (mgmt) API and raw HCI/L2CAP sockets directly, so the
+dbus `test-discovery` helper and the external `l2ping` binary are no longer
+used. The `bluez-test-scripts`, `python3-bluez`, and `python3-dbus` packages
+that those relied on are therefore no longer required.
+
 On Debian-based systems, these packages can be installed with the following command line:
 
-```sudo apt-get install bluez bluez-test-scripts python3-bluez python3-dbus libsqlite3-dev ubertooth```
+```sudo apt-get install bluez libsqlite3-dev ubertooth```
 
 To install the needed gems it may be helpful (but not required) to use bundler:
 

@@ -25,7 +25,12 @@ module BlueHydra
                   :l2ping_queue,
                   :result_thread,
                   :stunned,
-                  :processing_speed
+                  :processing_speed,
+                  :mgmt,
+                  :hci,
+                  :auto_connect_list,
+                  :le_pending,
+                  :le_info_scan_queue
 
     # if we have been passed the 'file' option in the config we should try to
     # read out the file as our data source. This allows for btmon captures to
@@ -86,6 +91,18 @@ module BlueHydra
         # Query History is used to track what addresses have been pinged
         self.query_history   = {}
 
+        # Devices currently in the kernel LE auto-connect list (mgmt Add Device),
+        # keyed by address => {address_type:, added_at:, connected:}. Bounded by
+        # CONNECT_PENDING_LIMIT; entries are removed event-driven during the
+        # CONNECT phase (Device Disconnected/Connect Failed) or cleared when the
+        # phase ends.
+        self.auto_connect_list = {}
+
+        # LE info-scan requests waiting for a slot in the auto-connect list,
+        # keyed by address => le_address_type (FIFO, deduped). Requests are held
+        # here (never dropped) when the auto-connect list is full.
+        self.le_pending = {}
+
         # Stunned
         self.stunned = false
 
@@ -94,11 +111,12 @@ module BlueHydra
 
         # various queues used for thread intercommunication, could be replaced
         # by true IPC sockets at some point but these work prety damn well
-        self.raw_queue       = Queue.new # btmon thread   -> chunker thread
-        self.chunk_queue     = Queue.new # chunker thread -> parser thread
-        self.result_queue    = Queue.new # parser thread  -> result thread
-        self.info_scan_queue = Queue.new # result thread  -> discovery thread
-        self.l2ping_queue    = Queue.new # result thread  -> discovery thread
+        self.raw_queue          = Queue.new # btmon thread   -> chunker thread
+        self.chunk_queue        = Queue.new # chunker thread -> parser thread
+        self.result_queue       = Queue.new # parser thread  -> result thread
+        self.info_scan_queue    = Queue.new # result thread  -> discovery thread (classic)
+        self.le_info_scan_queue = Queue.new # result thread  -> discovery thread (LE, serviced during discovery)
+        self.l2ping_queue       = Queue.new # result thread  -> discovery thread
 
         # start the result processing thread
         start_result_thread
@@ -255,6 +273,7 @@ module BlueHydra
         chunk_queue:       self.chunk_queue.length,
         result_queue:      self.result_queue.length,
         info_scan_queue:   self.info_scan_queue.length,
+        le_info_scan_queue: self.le_info_scan_queue.length,
         l2ping_queue:      self.l2ping_queue.length,
         btmon_thread:      self.btmon_thread.status,
         chunker_thread:    self.chunker_thread.status,
@@ -297,6 +316,30 @@ module BlueHydra
       unless BlueHydra.config["file"] #then stop doing anything if we are doing anything
         self.discovery_thread.kill if self.discovery_thread
         self.ubertooth_thread.kill if self.ubertooth_thread
+        if self.mgmt
+          # Clear anything we left in the kernel (auto-connect list, open
+          # connections) with a final reset before closing the control socket.
+          # A power-cycle drops the kernel's auto-connect (Add Device) entries
+          # so the controller isn't left background-connecting our devices after
+          # we exit. Best effort - never let shutdown hang on it.
+          begin
+            hci_reset
+          rescue => e
+            BlueHydra.logger.error("mgmt reset on shutdown failed: #{e.message}")
+          end
+          # close the shared mgmt control socket now that the discovery thread
+          # (its only user) has stopped issuing commands
+          self.mgmt.close
+        end
+
+        if self.hci
+          # close the raw HCI version-read socket / reader thread
+          begin
+            self.hci.close
+          rescue => e
+            BlueHydra.logger.error("hci socket close on shutdown failed: #{e.message}")
+          end
+        end
       end
 
       stop_condition = Proc.new do
@@ -339,11 +382,12 @@ module BlueHydra
       self.signal_spitter_thread.kill if self.signal_spitter_thread
       self.empty_spittoon_thread.kill if self.empty_spittoon_thread
 
-      self.raw_queue       = nil
-      self.chunk_queue     = nil
-      self.result_queue    = nil
-      self.info_scan_queue = nil
-      self.l2ping_queue    = nil
+      self.raw_queue          = nil
+      self.chunk_queue        = nil
+      self.result_queue       = nil
+      self.info_scan_queue    = nil
+      self.le_info_scan_queue = nil
+      self.l2ping_queue       = nil
     end
 
     # Start the thread which runs the specified command
@@ -392,134 +436,290 @@ module BlueHydra
       return true
     end
 
-    def bluetoothdDbusError(bluetoothd_errors)
-      BlueHydra.logger.info("Bluetoothd errors, attempting to recover...")
-      bluetoothd_errors += 1
-      begin
-        if bluetoothd_errors == 1
-          if ::File.executable?(`which rc-service 2> /dev/null`.chomp)
-            service = "rc-service"
-          elsif ::File.executable?(`which service 2> /dev/null`.chomp)
-            service = "service"
-          else
-            service = false
-          end
+    # Run a single discovery cycle using the kernel Bluetooth mgmt API. This
+    # replaces the external dbus `test-discovery` helper: it cooperates with
+    # bluetoothd at the kernel level instead of fighting it at the raw hci
+    # layer. Starts discovery, lets it run for +discovery_time+ seconds, then
+    # stops it. If the controller is not ready, BlueHydra::Mgmt attempts rfkill
+    # recovery and, failing that, raises BluezNotReadyError for us to escalate.
+    def run_mgmt_discovery(discovery_time)
+      # Reset before enabling discovery (the SCAN-on transition). SAFE here: the
+      # previous CONNECT phase cleared auto_connect_list, so the kernel auto-
+      # connect list is empty at this point. The power-cycle re-initializes the
+      # controller, which restores the kernel's post-connection interrogation
+      # (Read Remote Version) that version reads depend on - removing this reset
+      # (item 9) is what regressed version reads (item 19).
+      hci_reset
 
-          # Is bluetoothd running?
-          bluetoothd_pid = `pgrep bluetoothd`.chomp
-          unless bluetoothd_pid == ""
-            # Does init own bluetoothd?
-            if `ps -o ppid= #{bluetoothd_pid}`.chomp =~ /\s1/
-              if service
-                BlueHydra.logger.info("Restarting bluetoothd...")
-                bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
-              else
-                bluetoothd_restart ||= {}
-                bluetoothd_restart[:exit_code] == 127
-              end
-              sleep 3
-            else
-              # not controled by init, bail
-              unless BlueHydra.daemon_mode
-                self.cui_thread.kill if self.cui_thread
-              end
-              BlueHydra.logger.fatal("Bluetoothd is running but not controlled by init or functioning, please restart it manually.")
-              BlueHydra.send_event('blue_hydra',
-                                          {key: 'blue_hydra_bluetoothd_error',
-                                           title: 'Blue Hydra Encounterd Unrecoverable bluetoothd Error',
-                                           message: "bluetoothd is running but not controlled by init or functioning",
-                                           severity: 'FATAL'
-                                          })
-              exit 1
-            end
-          else
-            # bluetoothd isn't running at all, attempt to restart through init
-            if service
-              BlueHydra.logger.info("Starting bluetoothd...")
-              bluetoothd_restart = BlueHydra::Command.execute3("#{service} bluetooth restart")
-            else
-              bluetoothd_restart ||= {}
-              bluetoothd_restart[:exit_code] == 127
-            end
-            sleep 3
-          end
-          unless bluetoothd_restart[:exit_code] == 0
-            bluetoothd_errors += 1
-          end
-        end
-        if bluetoothd_errors > 1
-          unless BlueHydra.daemon_mode
-            self.cui_thread.kill if self.cui_thread
-          end
-          if bluetoothd_restart[:stderr]
-            BlueHydra.logger.error("Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}")
-            BlueHydra.send_event('blue_hydra',
-                                        {key: 'blue_hydra_bluetoothd_restart_failed',
-                                         title: 'Blue Hydra Failed To Restart bluetoothd',
-                                         message: "Failed to restart bluetoothd: #{bluetoothd_restart[:stderr]}",
-                                         severity: 'ERROR'
-                                        })
-          end
-          BlueHydra.logger.fatal("Bluetoothd is not functioning as expected and we failed to automatically recover.")
-          BlueHydra.send_event('blue_hydra',
-                                      {key: 'blue_hydra_bluetoothd_jank',
-                                       title: 'Blue Hydra Unable To Recover From Bluetoothd Error',
-                                       message: "Bluetoothd is not functioning as expected and we failed to automatically recover.",
-                                       severity: 'FATAL'
-                                      })
-          exit 1
-        end
-      rescue Errno::ENOMEM, NoMemoryError
-        BlueHydra.logger.fatal("System couldn't allocate enough memory to run an external command.")
-        BlueHydra.send_event('blue_hydra',
-                                    {
-                                      key: "bluehydra_oom",
-                                      title: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
-                                      message: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
-                                      severity: "FATAL"
-                                    })
-        exit 1
+      status = mgmt.start_discovery
+      unless status == BlueHydra::Mgmt::STATUS_SUCCESS
+        BlueHydra.logger.error("mgmt start discovery failed (status 0x%02x)" % status)
+        return
       end
-      return bluetoothd_errors
+
+      # Info scan disabled: stay in continuous discovery (the reader thread keeps
+      # it alive) - no CONNECT phase, since nothing is enqueued for LE/classic
+      # info in that mode. l2ping still runs in the discovery-thread drain (gated
+      # only by file-replay mode), briefly suppressing discovery per probe.
+      unless BlueHydra.info_scan
+        sleep discovery_time
+        return
+      end
+
+      # SCAN phase (discovery on): populate the auto-connect list. Then, only if
+      # we queued anything, a CONNECT phase to let those devices connect.
+      scan_phase(discovery_time)
+      connect_phase unless auto_connect_list.empty?
+    end
+
+    # SCAN phase: keep discovery on and feed the auto-connect list. Devices are
+    # added ONLY here, while discovering. No TTL sweep - the list accumulates
+    # freshly-requested advertisers up to CONNECT_PENDING_LIMIT; overflow waits
+    # (never dropped) in le_pending for the next round.
+    def scan_phase(seconds)
+      deadline = Time.now + seconds
+      while Time.now < deadline
+        sleep 1
+        service_le_info_scans
+
+        # Prune devices that have finished their connect/interrogate/disconnect
+        # cycle BEFORE topping the list back up. The kernel's ACTION_AUTO_CONNECT
+        # reconnects a device on every advertisement until we Remove Device, so
+        # a device left in the list is re-connected over and over for the whole
+        # scan window (observed: 10 devices producing 65 connections). Removing
+        # it as soon as its first cycle completes stops that churn; the freed
+        # slot lets fill_auto_connect pipeline in the next pending device.
+        process_connection_events
+
+        fill_auto_connect
+        break if self.auto_connect_list.size >= CONNECT_PENDING_LIMIT
+      end
+    end
+
+    # CONNECT phase: suppress discovery so the kernel's auto-connect scan gets
+    # the radio, then react to mgmt connection events until the pending set
+    # empties (primary exit) or DISCOVERY_OFF_BUDGET elapses (sole time-based
+    # safety net). No new devices are added here. On exit the auto-connect list
+    # is cleared so the in-memory view matches the kernel, and discovery resumes
+    # on the next cycle's start_discovery (which clears the suppression flag).
+    def connect_phase
+      drain_connection_events
+      disable_scan_before_connect # sets @discovery_suppressed + Stop Discovery
+      deadline = Time.now + DISCOVERY_OFF_BUDGET
+      loop do
+        process_connection_events
+        break if self.auto_connect_list.empty? # primary exit: all queries done
+        break if Time.now >= deadline          # safety net
+        sleep 0.1
+      end
+      clear_auto_connect
+    end
+
+    # Drain the LE info-scan queue into the auto-connect machinery. Must run only
+    # from the discovery thread (it touches le_pending / auto_connect_list).
+    # request_leinfo holds overflow in le_pending (never dropped), so it is safe
+    # to drain the whole queue here.
+    def service_le_info_scans
+      until le_info_scan_queue.empty?
+        request = le_info_scan_queue.pop
+        request_leinfo(request[:address], request[:le_address_type])
+      end
+    end
+
+    # Controller index (the N in hciN) parsed from the configured bt_device.
+    def mgmt_index
+      BlueHydra.config["bt_device"][/\d+/].to_i
+    end
+
+    # Run a connect-based classic scan (the block returns the command's stderr,
+    # or nil on success). Stage B of item 9: instead of power-cycling the
+    # controller before every connect, we try once and only hci_reset + retry
+    # once if the connection itself failed in a way a reset may clear (see
+    # RESET_WORTHY_CONNECT_ERROR). Returns the final stderr.
+    def scan_with_reset_retry
+      errors = yield
+      if errors && errors =~ RESET_WORTHY_CONNECT_ERROR
+        BlueHydra.logger.debug("connect failed (#{errors.chomp}); resetting and retrying once")
+        hci_reset
+        errors = yield
+      end
+      errors
+    end
+
+    # Keep contiguous discovery-off time within DISCOVERY_OFF_BUDGET during the
+    # classic/l2ping drain. Called BETWEEN per-device operations: if discovery
+    # has been off at least the budget since +off_since+, resume discovery for a
+    # short RESUME_DISCOVERY_WINDOW so scanning actually happens, then return a
+    # fresh off_since. Otherwise returns off_since unchanged. A single in-flight
+    # operation can still overrun the budget (it cannot be interrupted); this
+    # bounds the off-time across a backlog of operations.
+    def resume_discovery_if_over_budget(off_since)
+      return off_since if (Time.now - off_since) < DISCOVERY_OFF_BUDGET
+      mgmt.start_discovery
+      sleep RESUME_DISCOVERY_WINDOW
+      Time.now
+    end
+
+    # Maximum devices allowed in the kernel LE auto-connect list at once.
+    AUTO_CONNECT_LIMIT = 32
+
+    # Single bound (seconds) on how long discovery may be continuously off - the
+    # CONNECT phase and the classic drain. Sized above the observed worst-case
+    # single operation (LE connect ~5.5s). Sole time-based safety net.
+    DISCOVERY_OFF_BUDGET = 6
+    # Max devices we admit into a single CONNECT phase (<= AUTO_CONNECT_LIMIT).
+    CONNECT_PENDING_LIMIT = AUTO_CONNECT_LIMIT
+    # Small scanning window inserted into a long classic drain when the
+    # discovery-off budget is exceeded, so scanning actually happens.
+    RESUME_DISCOVERY_WINDOW = 2
+    # Bounded connect timeout for the native L2CAP reachability probe.
+    L2CAP_CONNECT_TIMEOUT = 4
+
+    # hcitool/l2ping connect errors that a controller reset may clear, as
+    # opposed to "no route to host" / "host is down" (the device is simply not
+    # reachable, so a reset would not help). Used to decide whether to reset and
+    # retry a failed classic connect (item 9, stage B).
+    RESET_WORTHY_CONNECT_ERROR = /create connection: (Input\/output|I\/O) error|Command Disallowed/i
+
+    # Request an LE info scan for a device. The request is NEVER dropped: if the
+    # kernel auto-connect list is full (AUTO_CONNECT_LIMIT) the device waits in
+    # le_pending (a FIFO, deduped by address) until a slot frees up. Devices that
+    # are already in the auto-connect list are ignored (already being handled).
+    def request_leinfo(address, le_address_type)
+      return if self.auto_connect_list.key?(address)
+      # Hash keeps insertion order (FIFO) and dedupes by address; re-requests
+      # just refresh the stored address type without losing queue position.
+      self.le_pending[address] = le_address_type
+      fill_auto_connect
+    end
+
+    # Promote as many pending LE devices into the auto-connect list as will fit
+    # (up to CONNECT_PENDING_LIMIT). Called during the SCAN phase and on each new
+    # request so pending devices flow in as slots free. No TTL sweep - entries
+    # are removed event-driven during the CONNECT phase, not by aging here.
+    def fill_auto_connect
+      while self.auto_connect_list.size < CONNECT_PENDING_LIMIT && !self.le_pending.empty?
+        address         = self.le_pending.keys.first
+        le_address_type = self.le_pending.delete(address)
+        add_to_auto_connect(address, le_address_type)
+      end
+    end
+
+    # Add one LE device to the kernel auto-connect list (mgmt Add Device,
+    # auto-connect action) and record it. Capacity is the caller's
+    # responsibility (see fill_auto_connect); this just performs the add.
+    def add_to_auto_connect(address, le_address_type)
+      addr_type = mgmt_le_address_type(le_address_type)
+      status    = mgmt.add_device(address, addr_type)
+      if status == BlueHydra::Mgmt::STATUS_SUCCESS
+        self.auto_connect_list[address] = { address_type: addr_type, added_at: Time.now, connected: false }
+        BlueHydra::CliUserInterfaceTracker.increment_auto_connect_added_count
+      else
+        # a mgmt-level add failure is logged and not re-queued (it would be
+        # re-requested next info_scan_rate cycle anyway); the pending-queue hold
+        # is only for the capacity case, which fill_auto_connect handles.
+        BlueHydra.logger.error("mgmt add device failed for #{address} (status 0x%02x)" % status)
+      end
+    end
+
+    # Remove a single device from the auto-connect list (mgmt Remove Device) and
+    # drop our bookkeeping for it.
+    def remove_from_auto_connect(address)
+      entry = self.auto_connect_list.delete(address)
+      return unless entry
+      status = mgmt.remove_device(address, entry[:address_type])
+      unless status == BlueHydra::Mgmt::STATUS_SUCCESS
+        BlueHydra.logger.error("mgmt remove device failed for #{address} (status 0x%02x)" % status)
+      end
+    end
+
+    # Map the parsed le_address_type ("Public"/"Random") to the mgmt Add Device
+    # LE address_type byte. Defaults to LE Random when the type is unknown.
+    def mgmt_le_address_type(le_address_type)
+      le_address_type.to_s =~ /public/i ? BlueHydra::Mgmt::LE_PUBLIC : BlueHydra::Mgmt::LE_RANDOM
+    end
+
+    # Drain the mgmt connection-event queue and use each event to manipulate the
+    # auto-connect list. Runs only on the discovery thread (sole mutator of
+    # auto_connect_list). Disconnect/failed remove the device immediately -
+    # faster than any timer (Req 3.5); connected marks the entry connected and
+    # keeps it pending; events for addresses we are not tracking are ignored.
+    def process_connection_events
+      return unless mgmt
+      loop do
+        event =
+          begin
+            mgmt.connection_events.pop(true)
+          rescue ThreadError
+            break # queue empty
+          end
+        address = event[:address]
+        entry   = self.auto_connect_list[address]
+        next unless entry # not a device this cycle is tracking
+        case event[:type]
+        when :connected
+          entry[:connected] = true
+          BlueHydra::CliUserInterfaceTracker.increment_auto_connect_connected_count
+        when :disconnected
+          # queries done for this device -> remove now, beating any timeout
+          remove_from_auto_connect(address)
+        when :failed
+          BlueHydra::CliUserInterfaceTracker.increment_auto_connect_failed_count
+          remove_from_auto_connect(address)
+        end
+      end
+    end
+
+    # Discard any connection events left over from a prior phase so the CONNECT
+    # phase only reacts to events for the devices it just added.
+    def drain_connection_events
+      mgmt.connection_events.clear if mgmt
+    end
+
+    # Remove every remaining auto-connect entry (mgmt Remove Device) so the
+    # in-memory list matches the kernel state at the end of a CONNECT phase.
+    def clear_auto_connect
+      self.auto_connect_list.keys.each { |address| remove_from_auto_connect(address) }
+    end
+
+    # Stop device discovery/scanning via the mgmt API before an info-scan
+    # connection attempt. See the call site in start_discovery_thread for the
+    # full rationale (in short: hcitool's LE Create Connection is rejected with
+    # "Command Disallowed" while the controller is still scanning). Best effort:
+    # any failure is logged and swallowed so a flaky mgmt socket never blocks
+    # the info scan.
+    #
+    # TODO: remove this in a future release to improve speed. Once the info-scan
+    # connection is itself driven through the mgmt API (cooperatively with
+    # bluetoothd) this explicit per-connect stop is redundant, and its extra
+    # socket round-trip is pure added latency in the scan/info-scan cycle.
+    def disable_scan_before_connect
+      mgmt.stop_discovery
+    rescue => e
+      BlueHydra.logger.error("mgmt stop discovery before connect failed: #{e.message}")
     end
 
     # helper method to reset the interface as needed
-    def hci_reset(bluetoothd_errors)
-      # interface reset
-      interface_reset = BlueHydra::Command.execute3("hciconfig #{BlueHydra.config["bt_device"]} reset")[:stderr]
-      if interface_reset
-        if interface_reset =~ /Connection timed out/i || interface_reset =~ /Operation not possible due to RF-kill/i
-          ## TODO: check error number not description
-          ## TODO: check for interface name "Can't init device hci0: Connection timed out (110)"
-          ## TODO: check for interface name "Can't init device hci0: Operation not possible due to RF-kill (132)"
-          raise BluezNotReadyError
-        else
-          BlueHydra.logger.error("Error with hciconfig #{BlueHydra.config["bt_device"]} reset..")
-          interface_reset.split("\n").each do |ln|
-            BlueHydra.logger.error(ln)
-          end
-        end
-      end
-      # Bluez 5.64 seems to have a bug in reset where the device shows powered but fails as not ready
+    #
+    # Uses the kernel Bluetooth mgmt API (Set Powered off then on) instead of
+    # shelling out to `hciconfig reset` + `bluetoothctl power on`. Powering the
+    # controller off clears its state (open connections, scanning) and powering
+    # it back on readies it - the cooperative, kernel-level equivalent of the
+    # old reset that no longer needs bluetoothd on the dbus. If the controller
+    # is not ready, BlueHydra::Mgmt attempts rfkill recovery internally and, if
+    # that fails, raises BluezNotReadyError for start_discovery_thread to
+    # escalate.
+    def hci_reset
+      status = mgmt.set_powered(false)
+      BlueHydra.logger.error("mgmt power off failed (status 0x%02x)" % status) unless status == BlueHydra::Mgmt::STATUS_SUCCESS
+
+      # Bluez 5.64 seems to have a bug in reset where the device shows powered
+      # but fails as not ready, so pause between power off and power on.
       sleep 1
-      interface_powerup = BlueHydra::Command.execute3("printf \"select #{BlueHydra::LOCAL_ADAPTER_ADDRESS.split}\npower on\n\" | timeout 2 bluetoothctl")
-      if interface_powerup[:exit_code] == 124
-        if interface_powerup[:stdout] =~ /Waiting to connect to bluetoothd.../i
-          BlueHydra.logger.info("bluetoothctl unable to connect to bluetoothd")
-          bluetoothdDbusError(bluetoothd_errors)
-        else
-          BlueHydra.logger.warn("Timeout occurred while powering on bluetooth adapter #{BlueHydra.config["bt_device"]}")
-          interface_powerup[:stdout].split("\n").each do |ln|
-            BlueHydra.logger.error(ln)
-          end
-        end
-      end
-      if interface_powerup[:stderr]
-        BlueHydra.logger.error("Error with bluetoothctl power on...")
-        interface_powerup[:stderr].split("\n").each do |ln|
-          BlueHydra.logger.error(ln)
-        end
-      end
+
+      status = mgmt.set_powered(true)
+      BlueHydra.logger.error("mgmt power on failed (status 0x%02x)" % status) unless status == BlueHydra::Mgmt::STATUS_SUCCESS
+
       sleep 1
     end
 
@@ -530,174 +730,163 @@ module BlueHydra
       self.discovery_thread = Thread.new do
         begin
 
+          # Open a single mgmt control socket for the life of the discovery
+          # thread and reuse it for every command (reset, discovery, disable
+          # scan). BlueHydra::Mgmt opens lazily on first use and transparently
+          # reopens if the socket is ever closed unexpectedly, so we just hold
+          # the instance here and close it in #stop.
+          self.mgmt = BlueHydra::Mgmt.new(mgmt_index)
+
+          # Dedicated raw-HCI reader that issues Read Remote Version Information
+          # for each LE connection the kernel opens (the kernel auto-reads LE
+          # features but never the version). Its own thread keeps this as close
+          # to real time as possible so the command lands inside the brief
+          # connected window. Closed in #stop alongside mgmt.
+          self.hci = BlueHydra::HciCommand.new(mgmt_index)
+          self.hci.start
+
+          # Native L2CAP reachability probe (replaces the external l2ping
+          # subprocess). Reused for every l2ping-queue entry this thread drains.
+          l2ping_probe = BlueHydra::L2Ping.new(mgmt_index, connect_timeout: L2CAP_CONNECT_TIMEOUT)
+
+          # We only read device info, never bond. Configure the controller
+          # non-bondable + NoInputNoOutput once so info/reachability connects
+          # don't create bonds or trigger PIN/passkey prompts (the mgmt reader
+          # also auto-rejects any pairing-request events). Best effort.
+          mgmt.configure_no_pairing
+
           if BlueHydra.info_scan
-            discovery_time    = 30
-            discovery_timeout = 45
+            discovery_time = 30
           else
-            discovery_time    = 180
-            discovery_timeout = 195
+            discovery_time = 60
           end
-          discovery_command = "#{File.expand_path('../../../bin/test-discovery', __FILE__)} --timeout #{discovery_time} -i #{BlueHydra.config["bt_device"]}"
 
           loop do
             begin
 
-              # set once here so if it fails on the first loop we don't get nil
-              bluez_errors      ||= 0
-              bluetoothd_errors ||= 0
+              # Reset before the classic connect phase, when there is classic
+              # info / l2ping work to do. SAFE here: auto_connect_list was
+              # cleared at the end of the previous CONNECT phase, so the kernel
+              # auto-connect list is empty and the reset cannot wipe live
+              # entries. Restores the clean controller state classic connects
+              # benefit from (same rationale as the pre-discovery reset).
+              unless info_scan_queue.empty? && l2ping_queue.empty?
+                hci_reset
+              end
 
-              # clear the queues
+              # clear the queues. Track when discovery went off so we can yield
+              # back to scanning between operations if the drain runs long
+              # (bounds contiguous discovery-off time to DISCOVERY_OFF_BUDGET).
+              off_since = Time.now
               until info_scan_queue.empty? && l2ping_queue.empty?
                 # clear out entire info scan queue first
                 until info_scan_queue.empty?
-
-                  # reset interface first to get to a good base state
-                  hci_reset(bluetoothd_errors)
-
+                  # yield to discovery between ops if we have been off too long
+                  off_since = resume_discovery_if_over_budget(off_since)
                   BlueHydra.logger.debug("Popping off info scan queue. Depth: #{ info_scan_queue.length}")
 
                   # grab a command out of the queue to run
                   command = info_scan_queue.pop
                   case command[:command]
                   when :info # classic mode devices
+                    # stop scanning before the classic connection (stage C will
+                    # revisit whether classic connects actually need this).
+                    disable_scan_before_connect
+
                     # run hcitool info against the specified address, capture
                     # errors, no need to capture stdout because the interesting
-                    # stuff is gonna be in btmon anyway
-                    info_errors = BlueHydra::Command.execute3("hcitool -i #{BlueHydra.config["bt_device"]} info #{command[:address]}",3)[:stderr]
+                    # stuff is gonna be in btmon anyway. Try once without a reset
+                    # and only reset+retry if the connection failed (stage B).
+                    info_errors = scan_with_reset_retry do
+                      BlueHydra::Command.execute3("hcitool -i #{BlueHydra.config["bt_device"]} info #{command[:address]}",3)[:stderr]
+                    end
 
-                  when :leinfo # low energy devices
-                    # run hcitool leinfo, capture errors
-                    info_errors = BlueHydra::Command.execute3("hcitool -i #{BlueHydra.config["bt_device"]} leinfo --random #{command[:address]}",3)[:stderr]
-
-                    # if we have errors fro le info scan attempt some
-                    # additional trickery to grab the data in a few other ways
-                    if info_errors == "Could not create connection: Input/output error" || info_errors == "Could not create connection: I/O error"
-                      info_errors = nil
-                      BlueHydra.logger.debug("Random leinfo failed against #{command[:address]}")
-                      hci_reset(bluetoothd_errors)
-                      info2_errors = BlueHydra::Command.execute3("hcitool -i #{BlueHydra.config["bt_device"]} leinfo --static #{command[:address]}",3)[:stderr]
-                      if info2_errors == "Could not create connection: Input/output error" || info_errors == "Could not create connection: I/O error"
-                        BlueHydra.logger.debug("Static leinfo failed against #{command[:address]}")
-                        hci_reset(bluetoothd_errors)
-                        info3_errors = BlueHydra::Command.execute3("hcitool -i #{BlueHydra.config["bt_device"]} leinfo #{command[:address]}",3)[:stderr]
-                        if info3_errors == "Could not create connection: Input/output error" || info_errors == "Could not create connection: I/O error"
-                          BlueHydra.logger.debug("Default leinfo failed against #{command[:address]}")
+                    # handle and log error output as needed
+                    if info_errors
+                      if info_errors.chomp =~ /connect: No route to host/i
+                        # We could handle this as negative feedback if we want
+                      elsif info_errors.chomp =~ /create connection: Input\/output error/i
+                        # We failed to connect, not sure why, not sure we care
+                      else
+                        BlueHydra.logger.error("Error with info command... #{command.inspect}")
+                        info_errors.split("\n").each do |ln|
+                          BlueHydra.logger.error(ln)
                         end
                       end
                     end
+
                   else
+                    # LE info scans no longer come through this queue; they are
+                    # serviced during the SCAN phase (see scan_phase /
+                    # service_le_info_scans). Anything else is unexpected.
                     BlueHydra.logger.error("Invalid command detected... #{command.inspect}")
-                    info_errors = nil
                   end
 
-                  # handle and log error output as needed
-                  if info_errors
-                    if info_errors.chomp =~ /connect: No route to host/i
-                      # We could handle this as negative feedback if we want
-                    elsif info_errors.chomp =~ /create connection: Input\/output error/i
-                      # We failed to connect, not sure why, not sure we care
-                    else
-                      BlueHydra.logger.error("Error with info command... #{command.inspect}")
-                      info_errors.split("\n").each do |ln|
-                        BlueHydra.logger.error(ln)
-                      end
-                    end
-                  end
                 end
 
                 # run 1 l2ping a time while still checking if info scan queue
                 # is empty
                 unless l2ping_queue.empty?
-                  hci_reset(bluetoothd_errors)
+                  # yield to discovery between ops if we have been off too long
+                  off_since = resume_discovery_if_over_budget(off_since)
+                  # Disable scanning before the l2ping connection, same as the
+                  # info-scan connect above (stage C will revisit this).
+                  disable_scan_before_connect
+
                   BlueHydra.logger.debug("Popping off l2ping queue. Depth: #{ l2ping_queue.length}")
                   command = l2ping_queue.pop
-                  l2ping_errors = BlueHydra::Command.execute3("l2ping -c 3 -i #{BlueHydra.config["bt_device"]} #{command[:address]}",5)[:stderr]
-                  if l2ping_errors
-                    if l2ping_errors.chomp =~ /connect: No route to host/i
-                      # We could handle this as negative feedback if we want
-                    elsif l2ping_errors.chomp =~ /connect: Host is down/i
-                      # Same as above
-                    elsif l2ping_errors.chomp =~ /create connection: Input\/output error/i
-                      # We failed to connect, not sure why, not sure we care
-                    elsif l2ping_errors.chomp =~ /connect: Connection refused/i
-                      #maybe we do care about this one? if it refused, it was there
-                    elsif l2ping_errors.chomp =~ /connect: Permission denied/i
-                      #this appears when we aren't root, but it also gets sent back from the remote host sometimes
-                    elsif l2ping_errors.chomp =~ /connect: Function not implemented/i
-                      # this isn't in the bluez code at all so it must be coming back from the remote host
-                    else
-                      BlueHydra.logger.error("Error with l2ping command... #{command.inspect}")
-                      l2ping_errors.split("\n").each do |ln|
-                        BlueHydra.logger.error(ln)
-                      end
-                    end
+                  # Native L2CAP reachability probe replaces shelling out to
+                  # l2ping: it pages the device (raising the ACL link that btmon
+                  # captures for parsing) and returns as soon as reachability is
+                  # known, with no echo exchange. A socket-level :error is
+                  # treated as reset-worthy so scan_with_reset_retry hci_resets
+                  # and retries once, mirroring the old connect-failure retry;
+                  # :reachable / :unreachable need no retry.
+                  probe_error = scan_with_reset_retry do
+                    l2ping_probe.reach?(command[:address]) == :error ? "create connection: I/O error" : nil
+                  end
+                  if probe_error
+                    BlueHydra.logger.error("Error with l2ping probe... #{command.inspect}")
                   end
                 end
               end
 
-              # another reset before going back to discovery
-              hci_reset(bluetoothd_errors)
+              # NOTE: we used to hci_reset (power-cycle) here before every
+              # discovery cycle. That is unnecessary now that discovery is
+              # continuous (the mgmt reader thread re-arms it) - power-cycling
+              # just tore the adapter down and re-initialized it each loop and
+              # fought the continuous scan. Removed (item 9, stage A). Resets now
+              # only happen on actual error/recovery paths.
 
               # hot loop avoidance, but run right before discovery to avoid any delay between discovery and info scan
               sleep 1
 
-              # run test-discovery
-              # do a discovery
-              self.scanner_status[:test_discovery] = Time.now.to_i unless BlueHydra.daemon_mode
-              discovery_errors = BlueHydra::Command.execute3(discovery_command,discovery_timeout)[:stderr]
-              if discovery_errors
-                if discovery_errors =~ /org.bluez.Error.NotReady/
-                  raise BluezNotReadyError
-                elsif discovery_errors =~ /dbus.exceptions.DBusException/i
-                  # This happens when bluetoothd isn't running or otherwise broken off the dbus
-                  # systemd
-                  #  dbus.exceptions.DBusException: org.freedesktop.systemd1.NoSuchUnit: Unit dbus-org.bluez.service not found.
-                  #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.ServiceUnknown: The name :1.[0-9]{5} was not provided by any .service files
-                  # gentoo (not systemd)
-                  #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.ServiceUnknown: The name org.bluez was not provided by any .service files
-                  #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.ServiceUnknown: The name :1.[0-9]{3} was not provided by any .service files
-                  #  dbus.exceptions.DBusException: org.freedesktop.DBus.Error.NameHasNoOwner: Could not get owner of name 'org.bluez': no such name
-                  bluetoothd_errors = bluetoothdDbusError(bluetoothd_errors)
-                elsif discovery_errors =~ /KeyboardInterrupt/
-                  # Sometimes the interrupt gets passed to test-discovery so assume it was meant for us
-                  BlueHydra.logger.info("BlueHydra Killed! Exiting... SIGINT")
-                  exit
-                else
-                  BlueHydra.logger.error("Error with test-discovery script..")
-                  discovery_errors.split("\n").each do |ln|
-                    BlueHydra.logger.error(ln)
-                  end
-                end
-              end
-
-              bluez_errors = 0
+              # run a discovery cycle via the kernel mgmt API (replaces the
+              # external dbus test-discovery helper)
+              run_mgmt_discovery(discovery_time)
 
             rescue BluezNotReadyError
-              BlueHydra.logger.info("Bluez reports not ready, attempting to recover...")
-              bluez_errors += 1
-              if bluez_errors == 1
-                BlueHydra.logger.error("Bluez reported #{BlueHydra.config["bt_device"]} not ready, attempting to reset with rfkill")
-                rfkillreset_command = "#{File.expand_path('../../../bin/rfkill-reset', __FILE__)} #{BlueHydra.config["bt_device"]}"
-                rfkillreset_errors = BlueHydra::Command.execute3(rfkillreset_command,45)[:stdout] #no output means no errors, all output to stdout
-                if rfkillreset_errors
-                  bluez_errors += 1
-                end
+              # BlueHydra::Mgmt has already attempted rfkill recovery and could
+              # not bring #{bt_device} back, so this is unrecoverable - escalate.
+              unless BlueHydra.daemon_mode
+                self.cui_thread.kill if self.cui_thread
+                puts "Bluez reported #{BlueHydra.config["bt_device"]} not ready and failed to auto-reset with rfkill"
+                puts "Try removing and replugging the card, or toggling rfkill on and off"
               end
-              if bluez_errors > 1
-                unless BlueHydra.daemon_mode
-                  self.cui_thread.kill if self.cui_thread
-                  puts "Bluez reported #{BlueHydra.config["bt_device"]} not ready and failed to auto-reset with rfkill"
-                  puts "Try removing and replugging the card, or toggling rfkill on and off"
-                end
-                BlueHydra.logger.fatal("Bluez reported #{BlueHydra.config["bt_device"]} not ready and failed to reset with rfkill")
-                BlueHydra.send_event('blue_hydra',
-                {key: 'blue_hydra_bluez_error',
-                title: 'Blue Hydra Encountered Bluez Error',
-                message: "Bluez reported #{BlueHydra.config["bt_device"]} not ready and failed to reset with rfkill",
-                severity: 'FATAL'
-                })
-                exit 1
-              end
+              BlueHydra.logger.fatal("Bluez reported #{BlueHydra.config["bt_device"]} not ready and failed to reset with rfkill")
+              BlueHydra.send_event('blue_hydra',
+              {key: 'blue_hydra_bluez_error',
+              title: 'Blue Hydra Encountered Bluez Error',
+              message: "Bluez reported #{BlueHydra.config["bt_device"]} not ready and failed to reset with rfkill",
+              severity: 'FATAL'
+              })
+              exit 1
+            rescue MgmtSocketError => e
+              # BlueHydra::Mgmt already emitted a specific socket-error event
+              # before giving up, so don't send a duplicate generic one here.
+              # Back off and let the loop retry - the adapter may re-enumerate.
+              BlueHydra.logger.error("mgmt control socket unrecoverable, sleeping 20s... (#{e.message})")
+              sleep 20
             rescue => e
               BlueHydra.logger.error("Discovery loop crashed: #{e.message}")
               e.backtrace.each do |x|
@@ -798,11 +987,47 @@ module BlueHydra
     end
 
     # helper method to push addresses intothe scan queues with a little
+    # Whether a device may be scanned over the classic (BR/EDR) info path.
+    #
+    # Guards the classic info_scan_queue against devices whose classic_mode is
+    # spurious/stale, so a futile classic connect (page timeout + hci_reset +
+    # retry, which starves discovery) is never enqueued for a device that does
+    # not actually speak BR/EDR:
+    #
+    #   1. A random/static LE address is not a BR/EDR public identity and can
+    #      never be reached by classic paging - reject outright.
+    #   2. An LE device flagged classic_mode but carrying NO positive classic
+    #      evidence (no class-of-device from a BR/EDR inquiry, no classic
+    #      features) has a stray/stale classic_mode - e.g. persisted from an
+    #      older buggy run, or set by a transport-agnostic event. classic_mode
+    #      only legitimately becomes true via a BR/EDR inquiry, which always
+    #      carries class-of-device, so genuine classic and dual-mode devices
+    #      still pass; only LE-only devices with a bogus flag are rejected.
+    def classic_scannable?(device)
+      return false if device.le_address_type.to_s =~ /Random/i
+      return false if device.le_mode && !classic_evidence?(device)
+      true
+    end
+
+    # True when a device carries positive evidence of a real BR/EDR presence:
+    # class-of-device (only ever set from a classic inquiry result) or classic
+    # features (only ever read over a classic connection). Used by
+    # classic_scannable? to tell a genuine dual-mode device from an LE-only
+    # device that was wrongly tagged classic_mode.
+    def classic_evidence?(device)
+      [device.classic_class,
+       device.classic_major_class,
+       device.classic_features_bitmap].any? do |v|
+        v && (v.respond_to?(:empty?) ? !v.empty? : !v.to_s.empty?)
+      end
+    end
+
     # pre-processing
-    def push_to_queue(mode, address)
+    def push_to_queue(mode, address, le_address_type = nil)
       case mode
       when :classic
         command = :info
+        queue   = info_scan_queue
         # use uap_lap for tracking classic devices
         track_addr = address.split(":")[2,4].join(":")
 
@@ -810,18 +1035,24 @@ module BlueHydra
         return if track_addr == BlueHydra::LOCAL_ADAPTER_ADDRESS.split(":")[2,4].join(":")
       when :le
         command = :leinfo
+        # LE goes on its own queue, serviced during discovery (auto-connect
+        # wants scanning on), separate from the classic queue which is drained
+        # in a discovery-off phase.
+        queue      = le_info_scan_queue
         track_addr = address
 
         # do not send local adapter to be scanned y(>_<)y
         return if address == BlueHydra::LOCAL_ADAPTER_ADDRESS
       end
 
-      # only scan if the info scan rate timeframe has elapsed
+      # only scan if the info scan rate timeframe has elapsed. info_scan_rate is
+      # in SECONDS (matching its documented unit and default), applied directly -
+      # no minutes conversion.
       self.query_history[track_addr] ||= {}
       last_info = self.query_history[track_addr][mode].to_i
       if BlueHydra.info_scan && (BlueHydra.config["info_scan_rate"].to_i > 0)
-        if (Time.now.to_i - (BlueHydra.config["info_scan_rate"].to_i * 60)) >= last_info
-          info_scan_queue.push({command: command, address: address})
+        if (Time.now.to_i - BlueHydra.config["info_scan_rate"].to_i) >= last_info
+          queue.push({command: command, address: address, le_address_type: le_address_type})
           self.query_history[track_addr][mode] = Time.now.to_i
         end
       end
@@ -1187,11 +1418,15 @@ module BlueHydra
                   if device.le_mode
                     #do not info scan beacon type devices, they do not respond while in advertising mode
                     if device.company_type !~ /iBeacon/i && device.company !~ /Gimbal/i
-                      push_to_queue(:le, device.address)
+                      # pass the parsed LE peer address type through so the
+                      # discovery thread's auto-connect uses it (no DB read; the
+                      # device object is already in memory here in the result
+                      # thread)
+                      push_to_queue(:le, device.address, device.le_address_type)
                     end
                   end
 
-                  if device.classic_mode
+                  if device.classic_mode && classic_scannable?(device)
                     push_to_queue(:classic, device.address)
                   end
                 end

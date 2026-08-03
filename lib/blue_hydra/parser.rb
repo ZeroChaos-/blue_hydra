@@ -31,6 +31,20 @@ module BlueHydra
       if @chunks[0] && @chunks[0][1]
         @bt_mode = @chunks[0][1] =~ /^\s+LE/ ? "le" : "classic"
       end
+
+      # Some HCI events (second line "Status:") carry NO transport indication,
+      # so @bt_mode defaults to "classic". They must NOT assert a mode:
+      #   * Read Remote Version/Supported Features/Extended Features Complete
+      #   * Disconnect Complete - shared by BR/EDR *and* LE ACL links (the LE
+      #     auto-connect churn produces a Disconnect Complete per attempt, each
+      #     now carrying Handle+Address), so treating it as classic would stamp
+      #     classic_mode=true on LE devices, flooding the classic info_scan_queue
+      #     with LE devices and mislabeling them CL/BR.
+      # For these events lmp_version/features are transport-agnostic and still
+      # set; only the le_mode/classic_mode assertion is skipped. (Connect
+      # Complete 0x03 is BR/EDR-only, so it legitimately asserts classic.)
+      @mode_agnostic = !!(@chunks[0] && @chunks[0][0] &&
+        @chunks[0][0] =~ /Read Remote (?:Version|Supported Features|Extended Features)|Disconnect Complete/)
     end
 
     # this ithe main work method which processes the @chunks Array
@@ -48,10 +62,12 @@ module BlueHydra
         timestamp = chunk.pop
         set_attr(:last_seen, timestamp.split(': ')[1].to_i)
 
-        if @bt_mode == "le"
-          set_attr(:le_mode, true)
-        elsif @bt_mode == "classic"
-          set_attr(:classic_mode, true)
+        unless @mode_agnostic
+          if @bt_mode == "le"
+            set_attr(:le_mode, true)
+          elsif @bt_mode == "classic"
+            set_attr(:classic_mode, true)
+          end
         end
 
         # group the chunk of lines into nested / related groups of data
@@ -318,7 +334,19 @@ module BlueHydra
 
       # TODO make use of handle
       when line =~ /^Handle:/
-        set_attr("#{bt_mode}_handle".to_sym, line.split(': ')[1])
+        # The current btmon format can combine handle + address on ONE line:
+        #   "Handle: 256 Address: AA:BB:CC:DD:EE:FF (Vendor)"
+        # This case is matched before the Address case, so it MUST also pull the
+        # address out here. Otherwise events that carry the device address only
+        # on this combined line (Read Remote Version Complete, Read Remote
+        # Supported/Extended Features, the LE connection-management subevents)
+        # yield no :address, and the whole result is dropped in the parser thread
+        # (address = (attrs[:address]||[]).uniq.first is nil) - which is exactly
+        # why remote versions never reached the device record or the VERS column.
+        set_attr("#{bt_mode}_handle".to_sym, line.split(': ')[1].split(' ').first)
+        if line =~ /ddress: ((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})/
+          set_attr("address".to_sym, $1)
+        end
 
       when line =~ /^Address:/ || line =~ /^Peer address:/ || line =~ /^LE Address:/
         addr, *addr_type = line.split(': ')[1].split(" ")

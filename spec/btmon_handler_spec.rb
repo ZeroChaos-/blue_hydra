@@ -76,15 +76,24 @@ describe BlueHydra::BtmonHandler do
   end
 
   describe "btmon --color=never handling" do
-    it "detects --color=never support from btmon --help" do
+    it "detects color-never support from the real btmon --help format" do
       handler = BlueHydra::BtmonHandler.allocate
 
+      # BlueZ 5.86 advertises the option as "-c, --color [mode]" with the modes
+      # listed separately (auto/always/never) - the literal "--color=never" is
+      # never printed, which is why the old exact-substring check missed it.
       allow(handler).to receive(:btmon_help).and_return(
-        "Usage:\n\tbtmon [options]\nOptions:\n\t--color=never  Disable colored output\n"
+        "Usage:\n\tbtmon [options]\nOptions:\n\t-c, --color [mode]     Output color: auto/always/never\n\t-w, --write <file>     Save traces\n"
       )
       expect(handler.color_never_supported?).to eq(true)
 
-      # older btmon without the flag
+      # also match an explicit "--color=never" spelling if a build uses it
+      allow(handler).to receive(:btmon_help).and_return(
+        "Options:\n\t--color=never  Disable colored output\n"
+      )
+      expect(handler.color_never_supported?).to eq(true)
+
+      # older btmon with no color option at all
       allow(handler).to receive(:btmon_help).and_return(
         "Usage:\n\tbtmon [options]\nOptions:\n\t-w, --write <file>  Save traces\n"
       )
@@ -139,6 +148,44 @@ describe BlueHydra::BtmonHandler do
       expect(joined).to include("DE:AD:BE:EF:CA:FE")
     ensure
       file.unlink if file
+    end
+  end
+
+  describe "truncated/wrapped btmon output detection" do
+    before { BlueHydra::CliUserInterfaceTracker.truncation_detected_count = 0 }
+
+    it "counts every truncated line but warns/alerts only once" do
+      handler = BlueHydra::BtmonHandler.allocate
+      logger  = double("logger")
+      allow(BlueHydra).to receive(:logger).and_return(logger)
+
+      # the warn log and event are gated so they fire once, not per line
+      expect(logger).to receive(:warn).once
+      expect(BlueHydra).to receive(:send_event).once.with(
+        'blue_hydra', hash_including(key: 'blue_hydra_btmon_truncated_output', severity: 'WARN')
+      )
+
+      # btmon truncates the name with ".." and wraps when --columns is too small
+      handler.check_for_truncation("< HCI Command: Write Scan.. (0x03|0x001a) plen 1")
+      handler.check_for_truncation("< HCI Command: LE Set Ext.. (0x08|0x0039) plen 2")
+      handler.check_for_truncation("< HCI Command: LE Clear A.. (0x08|0x003d) plen 0")
+
+      # the counter is NOT gated - every truncated line is counted
+      expect(BlueHydra::CliUserInterfaceTracker.truncation_detected_count).to eq(3)
+    end
+
+    it "does not count, warn, or alert on full-width (untruncated) output" do
+      handler = BlueHydra::BtmonHandler.allocate
+      logger  = double("logger")
+      allow(BlueHydra).to receive(:logger).and_return(logger)
+
+      expect(logger).not_to receive(:warn)
+      expect(BlueHydra).not_to receive(:send_event)
+
+      handler.check_for_truncation("< HCI Command: Write Scan Enable (0x03|0x001a) plen 1")
+      handler.check_for_truncation("        Status: Success (0x00)")
+
+      expect(BlueHydra::CliUserInterfaceTracker.truncation_detected_count).to eq(0)
     end
   end
 

@@ -26,6 +26,15 @@ module BlueHydra
     # bluez monitor "= ..." notes / index bookkeeping we drop
     NOTE_DROP_RE = /^= (bluetoothd: Unable to|New Index:|Delete Index:|Open Index:|Close Index:|Index Info:|Note:)/.freeze
 
+    # btmon truncates a message name with ".." (and wraps the timestamp onto the
+    # next line) when its column width is too small, e.g. run with --columns 80:
+    #   < HCI Command: Write Scan.. (0x03|0x001a) plen 1
+    #   < HCI Command: LE Set Ext.. (0x08|0x0039) plen 2
+    # The ".." immediately before the " (0xNN|0xNNNN)" opcode is a reliable
+    # marker of truncated/wrapped output that would otherwise break parsing. It
+    # never appears in full-width output.
+    TRUNCATION_RE = /\.\.\s+\(0x[0-9a-f]/i.freeze
+
     # Flush the gzip log(s) to disk once at least this many seconds have elapsed
     # since the previous flush completed. Zlib::GzipWriter buffers, and its
     # trailer is only written on close, so an ungraceful stop can truncate the
@@ -124,11 +133,16 @@ module BlueHydra
       end
     end
 
-    # true when the installed btmon advertises "--color=never" in its help.
-    # Any failure or an older btmon without the flag returns false so we keep
-    # stripping colors ourselves.
+    # true when the installed btmon can disable colored output. btmon advertises
+    # this as an option that takes a mode, e.g. BlueZ 5.86 prints:
+    #   -c, --color [mode]     Output color: auto/always/never
+    # so the literal "--color=never" never appears in the help. We instead look
+    # for a --color option line that lists a "never" mode. The argument is
+    # optional ([mode]), so it must be passed attached as "--color=never" (see
+    # configure_color_handling), which is what we do. Any failure or an older
+    # btmon without the flag returns false so we keep stripping colors ourselves.
     def color_never_supported?
-      btmon_help.include?("--color=never")
+      !!(btmon_help =~ /--color\b.*\bnever\b/)
     end
 
     # capture `btmon --help` output (stderr merged, since btmon prints usage
@@ -137,6 +151,35 @@ module BlueHydra
       `btmon --help 2>&1`
     rescue
       ""
+    end
+
+    # Count btmon output lines that have been truncated/wrapped because the
+    # column width is too small (see TRUNCATION_RE). Such output silently drops
+    # the tail of message names and pushes the timestamp onto a wrapped line,
+    # which breaks the chunker/parser. Every occurrence bumps the shared
+    # truncation counter (surfaced on the debug CUI chunker line). The warn log
+    # and event fire only once per run (gated by @truncation_warned) since the
+    # condition is constant for a given btmon invocation and would otherwise
+    # spam. The fix is a wider btmon --columns / PTY width.
+    def check_for_truncation(line)
+      return unless line =~ TRUNCATION_RE
+
+      # count every truncated line (ungated)
+      BlueHydra::CliUserInterfaceTracker.increment_truncation_detected_count
+
+      # alert once
+      return if @truncation_warned
+      @truncation_warned = true
+      msg = "btmon output appears truncated/wrapped - its column width is too " \
+            "small and message names/timestamps are being cut, which breaks " \
+            "parsing. Increase btmon --columns. Example line: #{line.strip}"
+      BlueHydra.logger.warn(msg)
+      BlueHydra.send_event('blue_hydra',
+        {key: 'blue_hydra_btmon_truncated_output',
+        title: 'Blue Hydra btmon Output Truncated',
+        message: msg,
+        severity: 'WARN'
+        })
     end
 
     # spawn a PTY to run @command
@@ -185,6 +228,16 @@ module BlueHydra
               end
             end
 
+            # A new message starts on a non-whitespace line. Compute once and
+            # reuse it for both the truncation check and the buffer flush below.
+            new_message = line =~ /^\S/
+
+            # Count btmon lines that look truncated/wrapped from too small a
+            # column width (which silently breaks parsing). Only message header
+            # lines carry the ".. (0x..)" marker, so gating on new_message keeps
+            # the regex off the (far more numerous) nested data lines.
+            check_for_truncation(line) if new_message
+
             # Messages are indented under a header as follows
             #
             #   Message A
@@ -203,7 +256,7 @@ module BlueHydra
             #
             # When we get a line that starts with non-whitespace we are dealing
             # with a new message starting
-            if line =~ /^\S/
+            if new_message
 
               # if we have nothing in the buffer its our first message of the
               # run so we dont need to do anything but if we have a non-zero

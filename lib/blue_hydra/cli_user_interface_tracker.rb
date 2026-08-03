@@ -18,18 +18,37 @@ module BlueHydra
     # multi_unique_address_chunk_count: chunks the chunker discarded because
     #   they had more than one unique address (a likely missing start block that
     #   merged two devices' data).
+    # truncation_detected_count: btmon output lines detected as truncated/wrapped
+    #   because btmon's column width is too small (which silently breaks
+    #   parsing). Written by the btmon thread rather than the chunker thread.
     @multi_address_chunk_count        = 0
     @zero_address_chunk_count         = 0
     @multi_unique_address_chunk_count = 0
+    @truncation_detected_count        = 0
+
+    # Auto-connect health counters (written only by the discovery thread, single
+    # writer, so plain increments are safe). Surfaced on the debug CUI line so a
+    # regression like "adds climbing while connects stay flat" is visible live.
+    # auto_connect_added_count:     devices successfully added (mgmt Add Device)
+    # auto_connect_connected_count: mgmt Device Connected events observed
+    # auto_connect_failed_count:    mgmt Connect Failed events observed
+    @auto_connect_added_count         = 0
+    @auto_connect_connected_count     = 0
+    @auto_connect_failed_count        = 0
 
     class << self
       attr_accessor :multi_address_chunk_count,
                     :zero_address_chunk_count,
-                    :multi_unique_address_chunk_count
+                    :multi_unique_address_chunk_count,
+                    :truncation_detected_count,
+                    :auto_connect_added_count,
+                    :auto_connect_connected_count,
+                    :auto_connect_failed_count
     end
 
-    # Increment helpers, called by the chunker. Only the chunker thread writes
-    # these, so plain increments are safe.
+    # Increment helpers. Each counter has a single writer thread (the chunker
+    # for the chunk counters, the btmon thread for truncation_detected_count),
+    # so plain increments are safe.
     def self.increment_multi_address_chunk_count
       @multi_address_chunk_count += 1
     end
@@ -40,6 +59,22 @@ module BlueHydra
 
     def self.increment_multi_unique_address_chunk_count
       @multi_unique_address_chunk_count += 1
+    end
+
+    def self.increment_truncation_detected_count
+      @truncation_detected_count += 1
+    end
+
+    def self.increment_auto_connect_added_count
+      @auto_connect_added_count += 1
+    end
+
+    def self.increment_auto_connect_connected_count
+      @auto_connect_connected_count += 1
+    end
+
+    def self.increment_auto_connect_failed_count
+      @auto_connect_failed_count += 1
     end
 
     # This method initializes with a runner and some data and then handles
@@ -127,20 +162,21 @@ module BlueHydra
         bt_mode = chunk[0][0] =~ /^\s+LE/ ? "le" : "classic"
       end
 
+      # Remember which transport(s) we've actually seen this device on. A remote
+      # version read arrives in a transport-agnostic chunk (parsed as classic),
+      # so we must NOT label it from that chunk's mode - use the device's known
+      # transport instead. Prefer LE when the device has ever been seen on LE
+      # (the version chunk itself may spuriously set :classic; :le-first wins).
+      cui_status[@uuid][:le]      = true if bt_mode == "le"
+      cui_status[@uuid][:classic] = true if bt_mode == "classic"
+
       # use lmp version to make a simplified copy of the version for table
       # display, set as :vers under the uuid key
-      if bt_mode == "le"
-        if attrs[:lmp_version] && attrs[:lmp_version].first !~ /\(0x(00|FF)\)/i
-          cui_status[@uuid][:vers] = "LE#{attrs[:lmp_version].first.split(" ")[1]}"
-        elsif !cui_status[@uuid][:vers]
-          cui_status[@uuid][:vers] = "BTLE"
-        end
-      else
-        if attrs[:lmp_version] && attrs[:lmp_version].first !~ /\(0x(00|FF)\)/i
-          cui_status[@uuid][:vers] = "CL#{attrs[:lmp_version].first.split(" ")[1]}"
-        elsif !cui_status[@uuid][:vers]
-          cui_status[@uuid][:vers] = "CL/BR"
-        end
+      if attrs[:lmp_version] && attrs[:lmp_version].first !~ /\(0x(00|FF)\)/i
+        prefix = cui_status[@uuid][:le] ? "LE" : "CL"
+        cui_status[@uuid][:vers] = "#{prefix}#{attrs[:lmp_version].first.split(" ")[1]}"
+      elsif !cui_status[@uuid][:vers]
+        cui_status[@uuid][:vers] = bt_mode == "le" ? "BTLE" : "CL/BR"
       end
 
       # update the following attributes with a little of massaging to get the
