@@ -85,9 +85,48 @@ module BlueHydra
     # a subset of mgmt status codes (see mgmt.h).
     STATUS_SUCCESS       = 0x00
     STATUS_BUSY          = 0x0a
+    STATUS_REJECTED      = 0x0b
     STATUS_NOT_POWERED   = 0x0f
     STATUS_INVALID_INDEX = 0x11
     STATUS_RFKILLED      = 0x12
+
+    # Full mgmt status byte -> name map (mgmt.h MGMT_STATUS_*), used only to make
+    # log lines self-describing. Two things worth knowing when reading these:
+    #   * 0x0b REJECTED is the kernel's catch-all for "refused this request": it
+    #     is what the HCI->mgmt table maps the rejected-security / pairing-not-
+    #     allowed / insufficient-security family onto, AND what mgmt_errno_status
+    #     maps an internal -EPERM onto. It does NOT mean our process lacks
+    #     privileges (that would be 0x14 PERMISSION_DENIED).
+    #   * 0x14 PERMISSION_DENIED is the actual "not allowed to do this" code.
+    STATUS_NAMES = {
+      0x00 => "SUCCESS",
+      0x01 => "UNKNOWN_COMMAND",
+      0x02 => "NOT_CONNECTED",
+      0x03 => "FAILED",
+      0x04 => "CONNECT_FAILED",
+      0x05 => "AUTH_FAILED",
+      0x06 => "NOT_PAIRED",
+      0x07 => "NO_RESOURCES",
+      0x08 => "TIMEOUT",
+      0x09 => "ALREADY_CONNECTED",
+      0x0a => "BUSY",
+      0x0b => "REJECTED",
+      0x0c => "NOT_SUPPORTED",
+      0x0d => "INVALID_PARAMS",
+      0x0e => "DISCONNECTED",
+      0x0f => "NOT_POWERED",
+      0x10 => "CANCELLED",
+      0x11 => "INVALID_INDEX",
+      0x12 => "RFKILLED",
+      0x13 => "ALREADY_PAIRED",
+      0x14 => "PERMISSION_DENIED"
+    }.freeze
+
+    # Render a status byte as "0x0b (REJECTED)" for logging. Unknown codes still
+    # show the raw byte so nothing is lost.
+    def self.status_label(status)
+      format("0x%02x (%s)", status, STATUS_NAMES.fetch(status, "UNKNOWN"))
+    end
 
     # statuses that mean the controller isn't ready to accept commands and that
     # an rfkill unblock/reset may be able to recover from.
@@ -217,9 +256,9 @@ module BlueHydra
     # bond is ever formed and nothing blocks on a prompt.
     def configure_no_pairing
       status = set_bondable(false)
-      BlueHydra.logger.warn("mgmt: set_bondable(off) status 0x%02x" % status) unless status == STATUS_SUCCESS
+      BlueHydra.logger.warn("mgmt: set_bondable(off) status #{self.class.status_label(status)}") unless status == STATUS_SUCCESS
       status = set_io_capability(IO_CAP_NO_INPUT_NO_OUTPUT)
-      BlueHydra.logger.warn("mgmt: set_io_capability(NoInputNoOutput) status 0x%02x" % status) unless status == STATUS_SUCCESS
+      BlueHydra.logger.warn("mgmt: set_io_capability(NoInputNoOutput) status #{self.class.status_label(status)}") unless status == STATUS_SUCCESS
     rescue => e
       BlueHydra.logger.error("mgmt: configure_no_pairing failed: #{e.message}")
     end
@@ -280,7 +319,7 @@ module BlueHydra
       return response unless NOT_READY_STATUSES.include?(status_of(response))
 
       BlueHydra.logger.warn(
-        format("mgmt: %s not ready (status 0x%02x), attempting rfkill recovery", device, status_of(response))
+        format("mgmt: %s not ready (status %s), attempting rfkill recovery", device, self.class.status_label(status_of(response)))
       )
       raise BluezNotReadyError unless rfkill_recover
 

@@ -121,6 +121,37 @@ HELP
       $stdin.gets.chomp
     end
 
+    # Number of rows in the controlling terminal, used to cap how many device
+    # rows render_cui prints.
+    #
+    # Read straight off the tty with io/console (a TIOCGWINSZ ioctl) rather than
+    # shelling out to `tput lines`. That drops an external binary (ncurses, not
+    # present on a bare Alpine image, and a missing tput raised an unrescued
+    # Errno::ENOENT here), the TERM/terminfo dependency, and the fork - which is
+    # what the old Errno::ENOMEM rescue on this call existed to catch.
+    #
+    # Deliberately fatal rather than falling back to a default size (io/console
+    # ships IO.console_size for that): the CUI is only started for an
+    # interactive run - start_cui_thread is skipped in daemon mode - so no
+    # console here means the invocation is wrong, and guessing 80x25 would
+    # silently render an arbitrarily truncated device table. Note that `exit`
+    # from this (non-main) thread does terminate the process.
+    def terminal_height
+      console = IO.console
+      if console.nil?
+        message = "BlueHydra could not determine the terminal size: no console " \
+                  "is attached to this process. The CLI UI needs a terminal - " \
+                  "run blue_hydra from an interactive shell (for a container, " \
+                  "give it a tty, e.g. `docker run -it` / `docker exec -it`), " \
+                  "or use --daemonize to run without the UI."
+        BlueHydra.logger.fatal(message)
+        $stderr.puts(message)
+        exit 1
+      end
+
+      console.winsize.first
+    end
+
     # the main work loop which prints the actual data to screen
     def cui_loop
       reset         = false # determine if we need to reset the loop by restarting method
@@ -156,19 +187,8 @@ HELP
         end
       end
 
-      # figure out the terminal height using tput command
-      begin
-      max_height = `tput lines`.chomp.to_i
-      rescue Errno::ENOMEM, NoMemoryError
-        BlueHydra.send_event('blue_hydra',
-        {
-          key: "bluehydra_oom",
-          title: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
-          message: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
-          severity: "FATAL"
-        })
-        exit 1
-      end
+      # figure out the terminal height
+      max_height = terminal_height
       until reset do
         trap("SIGWINCH") do
           # when we we get SIGWINCH we want to reset the display so we break

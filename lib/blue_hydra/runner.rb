@@ -453,7 +453,7 @@ module BlueHydra
 
       status = mgmt.start_discovery
       unless status == BlueHydra::Mgmt::STATUS_SUCCESS
-        BlueHydra.logger.error("mgmt start discovery failed (status 0x%02x)" % status)
+        BlueHydra.logger.error("mgmt start discovery failed (status #{BlueHydra::Mgmt.status_label(status)})")
         return
       end
 
@@ -618,19 +618,42 @@ module BlueHydra
         # a mgmt-level add failure is logged and not re-queued (it would be
         # re-requested next info_scan_rate cycle anyway); the pending-queue hold
         # is only for the capacity case, which fill_auto_connect handles.
-        BlueHydra.logger.error("mgmt add device failed for #{address} (status 0x%02x)" % status)
+        BlueHydra.logger.error("mgmt add device failed for #{address} (status #{BlueHydra::Mgmt.status_label(status)})")
       end
     end
 
     # Remove a single device from the auto-connect list (mgmt Remove Device) and
     # drop our bookkeeping for it.
+    #
+    # The local entry is dropped unconditionally, even when the mgmt removal
+    # fails. This hash doubles as the set of devices the CONNECT phase is still
+    # working (connect_phase exits when it empties, fill_auto_connect sizes
+    # capacity off it), so keeping a stuck entry would wedge both. The cost of
+    # dropping it is that a failed removal leaks the kernel-side hci_conn_params
+    # entry: that is host state, so the hci_reset before the next discovery does
+    # NOT clear it, and nothing will retry the removal later. To keep a transient
+    # failure from leaking a slot we retry once here, then give up and log loudly
+    # (a persistent leak eventually starves AUTO_CONNECT_LIMIT).
     def remove_from_auto_connect(address)
       entry = self.auto_connect_list.delete(address)
       return unless entry
+
       status = mgmt.remove_device(address, entry[:address_type])
-      unless status == BlueHydra::Mgmt::STATUS_SUCCESS
-        BlueHydra.logger.error("mgmt remove device failed for #{address} (status 0x%02x)" % status)
-      end
+      return if status == BlueHydra::Mgmt::STATUS_SUCCESS
+
+      BlueHydra.logger.warn(
+        "mgmt remove device failed for #{address} " \
+        "(status #{BlueHydra::Mgmt.status_label(status)}), retrying once"
+      )
+
+      status = mgmt.remove_device(address, entry[:address_type])
+      return if status == BlueHydra::Mgmt::STATUS_SUCCESS
+
+      BlueHydra.logger.error(
+        "mgmt remove device retry failed for #{address} " \
+        "(status #{BlueHydra::Mgmt.status_label(status)}); dropping it anyway - " \
+        "the kernel auto-connect entry for this address may persist"
+      )
     end
 
     # Map the parsed le_address_type ("Public"/"Random") to the mgmt Add Device
@@ -711,14 +734,14 @@ module BlueHydra
     # escalate.
     def hci_reset
       status = mgmt.set_powered(false)
-      BlueHydra.logger.error("mgmt power off failed (status 0x%02x)" % status) unless status == BlueHydra::Mgmt::STATUS_SUCCESS
+      BlueHydra.logger.error("mgmt power off failed (status #{BlueHydra::Mgmt.status_label(status)})") unless status == BlueHydra::Mgmt::STATUS_SUCCESS
 
       # Bluez 5.64 seems to have a bug in reset where the device shows powered
       # but fails as not ready, so pause between power off and power on.
       sleep 1
 
       status = mgmt.set_powered(true)
-      BlueHydra.logger.error("mgmt power on failed (status 0x%02x)" % status) unless status == BlueHydra::Mgmt::STATUS_SUCCESS
+      BlueHydra.logger.error("mgmt power on failed (status #{BlueHydra::Mgmt.status_label(status)})") unless status == BlueHydra::Mgmt::STATUS_SUCCESS
 
       sleep 1
     end

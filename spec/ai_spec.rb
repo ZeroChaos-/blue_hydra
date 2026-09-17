@@ -731,11 +731,23 @@ describe "BlueHydra::Chunker dispatch" do
   end
 
   it "logs to the chunk logger when chunker_debug is enabled" do
+    # Must be a double: writing the real chunk logger is a suite failure (see
+    # ChunkLogGuard in spec_helper). Asserting against it also makes this
+    # example actually test what its name says - it previously only checked that
+    # the zero-address chunk was discarded.
+    chunk_log = double("chunk_logger", info: nil)
+    allow(BlueHydra).to receive(:chunk_logger).and_return(chunk_log)
+
     BlueHydra.config["chunker_debug"] = true
-    q_in = Queue.new; q_out = Queue.new
-    drain(q_in, q_out, [no_address_msg, starting_msg("AA:BB:CC:00:00:06")])
-    expect(q_out.empty?).to eq(true)
-    BlueHydra.config["chunker_debug"] = false
+    begin
+      q_in = Queue.new; q_out = Queue.new
+      drain(q_in, q_out, [no_address_msg, starting_msg("AA:BB:CC:00:00:06")])
+      expect(q_out.empty?).to eq(true)
+      expect(chunk_log).to have_received(:info).at_least(:once)
+    ensure
+      # ensure, so a failure here cannot leak chunker_debug into other examples
+      BlueHydra.config["chunker_debug"] = false
+    end
   end
 end
 

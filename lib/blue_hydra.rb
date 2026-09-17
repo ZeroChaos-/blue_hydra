@@ -10,6 +10,9 @@ require 'fileutils'
 require 'socket'
 require 'timeout'
 require 'set'
+# IO#winsize / IO.console, used by CliUserInterface to size the display. A
+# default gem, so it ships with ruby itself - nothing to install.
+require 'io/console'
 
 # Core Libs required by datamapper
 require 'stringio'

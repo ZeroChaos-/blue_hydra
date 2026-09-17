@@ -278,7 +278,30 @@ module BlueHydra
           enqueue(buffer)
 
           raise BtmonExitedError
+        ensure
+          reap(pid)
         end
+      end
+    end
+
+    # Stop the child if it is still running and reap it, so an exiting handler
+    # cannot leave a stray btmon holding the controller or a zombie behind.
+    #
+    # PTY.spawn does not wait on the child it forks, so without this every btmon
+    # restart left a zombie for the life of the process (child state Zs). The
+    # TERM comes first because the reader loop can exit while the child is still
+    # running, and a bare wait would then block forever.
+    def reap(pid)
+      begin
+        ::Process.kill("TERM", pid)
+      rescue Errno::ESRCH, Errno::EPERM
+        # already exited, or not ours to signal
+      end
+
+      begin
+        ::Process.wait(pid)
+      rescue Errno::ECHILD
+        # already reaped
       end
     end
 
