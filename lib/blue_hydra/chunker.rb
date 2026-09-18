@@ -7,6 +7,13 @@ module BlueHydra
     # device chunk. bluez monitor/packet.c static const struct event_data
     # event_table. Frozen set so membership is O(1) and adding a code neither
     # slows the check nor forces a per-call regex rebuild.
+    # The rule is: any event that renders a device address starts its own chunk.
+    # That includes the handle-carrying events, because bluez monitor resolves the
+    # handle and prints "Handle: 256 (BR-ACL) Address: AA:BB:.." - so they carry an
+    # address even though the wire format only has a handle. An address-bearing
+    # event that is NOT listed here gets appended to whichever chunk is open, and
+    # merges a second device into it whenever the open chunk belongs to a
+    # different connection.
     HCI_EVENT_START_CODES = [
       "03", # Connect Complete
       "04", # Connect Request
@@ -16,9 +23,11 @@ module BlueHydra
       "0c", # Read Remote Version Information Complete (Handle+Address, LMP version)
       "0e", # Command Complete
       "12", # Role Change
+      "1b", # Max Slots Change (Handle+Address)
       "22", # Inquiry Result with RSSI
       "23", # Read Remote Extended Features Complete (Handle+Address)
       "2f", # Extended Inquiry Result
+      "38", # Link Supervision Timeout Changed (Handle+Address)
       "3d", # Remote Host Supported Features
     ].to_set.freeze
 
@@ -35,6 +44,7 @@ module BlueHydra
     #   0x02 LE Advertising Report
     #   0x03 LE Connection Update Complete (Handle+Address)
     #   0x04 LE Read Remote Used Features (Handle+Address)
+    #   0x06 LE Remote Connection Parameter Request (Handle+Address)
     #   0x07 LE Data Length Change (Handle+Address)
     #   0x0a LE Enhanced Connection Complete (Peer address)
     #   0x0c LE PHY Update Complete (Handle+Address)
@@ -44,8 +54,16 @@ module BlueHydra
     # showed them merging a second device into an open chunk during concurrent
     # connections (event-driven auto-connect keeps many devices connected at
     # once), which discarded the chunk as multi-unique-address.
+    #
+    # 0x06 was added for the same reason, found the same way: replaying a 17 hour
+    # capture, all 109 of its events merged into somebody else's chunk (it was
+    # never a start, so it always did), accounting for 109 of 117
+    # multi-address-line chunks and ALL THREE discarded as multi-unique-address.
+    # It is the peer asking to renegotiate an existing connection, so it turns up
+    # interleaved with other devices' events whenever more than one device is
+    # connected - which event-driven auto-connect makes the normal state.
     LE_META_EVENT_CODE     = "3e".freeze
-    LE_META_START_SUBEVENT = /\(0x(?:01|02|03|04|07|0a|0c|0d|14)\)/.freeze
+    LE_META_START_SUBEVENT = /\(0x(?:01|02|03|04|06|07|0a|0c|0d|14)\)/.freeze
 
     # name has been moved into the MGMT "Device Found" event in newer bluez
     MGMT_DEVICE_FOUND_RE   = /@ MGMT Event: .* \(0x0012\)/.freeze

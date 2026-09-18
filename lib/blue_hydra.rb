@@ -79,7 +79,8 @@ module BlueHydra
     "ui_exc_filter_prox" => [],           # exclude ui filter by prox uuid / major /minor
     "ignore_mac"         => [],           # completely ignore a mac address, both ui and db
     "signal_spitter"     => false,        # make raw signal strength api available on localhost:1124
-    "chunker_debug"      => false
+    "chunker_debug"      => false,
+    "le_connect_parallel" => 10           # max simultaneous direct LE connects (private-address devices)
   }
 
   # Create config file with defaults if missing or load and update.
@@ -386,6 +387,7 @@ require 'blue_hydra/chunker'
 require 'blue_hydra/mgmt'
 require 'blue_hydra/hci_command'
 require 'blue_hydra/l2ping'
+require 'blue_hydra/le_connect'
 require 'blue_hydra/runner'
 require 'blue_hydra/command'
 require 'blue_hydra/device'

@@ -128,3 +128,49 @@ describe BlueHydra::Parser do
     expect(p.attributes[:le_mode]).to be_nil
   end
 end
+
+# A failed Read Remote Version Complete still carries a full payload, filled with
+# Reserved (0xff) / Manufacturer 65535. Recording it overwrites a device's real
+# version with junk, which is what happened on-device to 26 of 65 version reads.
+describe "BlueHydra::Parser failed remote-version reads" do
+  def version_chunk(status)
+    [[
+      "> HCI Event: Read Remote Version Complete (0x0c) plen 8",
+      "        Status: #{status}",
+      "        Handle: 2048 (LE-ACL) Address: EC:81:93:14:EC:07 (Logitech, Inc)",
+      "        LMP version: #{status =~ /Success/ ? 'Bluetooth 5.0 (0x09) - Subversion 22 (0x0016)' : 'Reserved (0xff) - Subversion 65535 (0xffff)'}",
+      "        Manufacturer: #{status =~ /Success/ ? 'Broadcom Corporation (15)' : 'Ericsson Technology Licensing (65535)'}",
+      "last_seen: 1449747024"
+    ]]
+  end
+
+  it "records the version when the read succeeded" do
+    parser = BlueHydra::Parser.new(version_chunk("Success (0x00)"))
+    parser.parse
+    expect(parser.attributes[:lmp_version].first).to eq("Bluetooth 5.0 (0x09) - Subversion 22 (0x0016)")
+    expect(parser.attributes[:address].first).to eq("EC:81:93:14:EC:07")
+  end
+
+  it "ignores the version when the read failed" do
+    parser = BlueHydra::Parser.new(version_chunk("Connection Failed to be Established (0x3e)"))
+    parser.parse
+    expect(parser.attributes[:lmp_version]).to be_nil
+    expect(parser.attributes[:manufacturer]).to be_nil
+    # the address is still good - only the payload the failure invalidates is dropped
+    expect(parser.attributes[:address].first).to eq("EC:81:93:14:EC:07")
+  end
+
+  it "does not suppress payloads on unrelated events that carry a status" do
+    # an LE Connection Complete failure must not stop us recording other data
+    chunk = [[
+      "> HCI Event: LE Meta Event (0x3e) plen 19",
+      "        LE Connection Complete (0x01)",
+      "        Status: Unknown Connection Identifier (0x02)",
+      "        Address: EC:81:93:14:EC:07 (Logitech, Inc)",
+      "last_seen: 1449747024"
+    ]]
+    parser = BlueHydra::Parser.new(chunk)
+    parser.parse
+    expect(parser.attributes[:address].first).to eq("EC:81:93:14:EC:07")
+  end
+end

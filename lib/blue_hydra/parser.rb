@@ -53,8 +53,9 @@ module BlueHydra
       @chunks.each do |chunk|
 
         # the first line is no longer useful as we have extracted the mode and
-        # timestamp at other points in the pipeline. Time to discard it
-        chunk.shift
+        # timestamp at other points in the pipeline. Time to discard it - but keep
+        # it long enough to tell which event this chunk is (see @failed_status)
+        header = chunk.shift
 
         # the last message will always be a timestamp from the chunker, this
         # value is used throughout during this parsing process but should
@@ -69,6 +70,17 @@ module BlueHydra
             set_attr(:classic_mode, true)
           end
         end
+
+        # A failed Read Remote * Complete still carries a full payload, and it is
+        # junk: status "Connection Failed to be Established" comes with LMP
+        # version Reserved (0xff) and Manufacturer 65535. Recording that
+        # overwrites a device's real version (observed on-device: 26 of 65 version
+        # reads came back this way, every one with a failure status).
+        #
+        # Scoped to the Read Remote family so an unrelated event carrying a
+        # Status cannot suppress good data, and checked per chunk.
+        @failed_status = !!(header.to_s =~ /Read Remote/) &&
+                         chunk.any? { |l| l =~ /^\s*Status:/ && l !~ /Status:\s+Success/ }
 
         # group the chunk of lines into nested / related groups of data
         # containing 1 or more lines
@@ -357,10 +369,13 @@ module BlueHydra
         end
 
       when line =~ /^LMP version:/
-        set_attr("lmp_version".to_sym, line.split(': ')[1])
+        # only trust the version if the event carrying it succeeded (see
+        # @failed_status) - a failed read reports Reserved (0xff)
+        set_attr("lmp_version".to_sym, line.split(': ')[1]) unless @failed_status
 
       when line =~ /^Manufacturer:/
-        set_attr("manufacturer".to_sym, line.split(': ')[1])
+        # same event, same problem: a failed read reports 65535 here
+        set_attr("manufacturer".to_sym, line.split(': ')[1]) unless @failed_status
 
       when line =~ /^UUID:/
         set_attr("#{bt_mode}_service_uuids".to_sym, line.split(': ')[1])

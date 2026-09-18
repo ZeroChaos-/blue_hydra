@@ -29,12 +29,36 @@ module BlueHydra
     # Auto-connect health counters (written only by the discovery thread, single
     # writer, so plain increments are safe). Surfaced on the debug CUI line so a
     # regression like "adds climbing while connects stay flat" is visible live.
-    # auto_connect_added_count:     devices successfully added (mgmt Add Device)
-    # auto_connect_connected_count: mgmt Device Connected events observed
-    # auto_connect_failed_count:    mgmt Connect Failed events observed
+    # auto_connect_added_count:      devices successfully added (mgmt Add Device)
+    # auto_connect_connected_count:  mgmt Device Connected events observed
+    # auto_connect_failed_count:     mgmt Connect Failed events observed. Note the
+    #   kernel only emits this for an explicit connect attempt - a background
+    #   auto-connect that never sees the device advertise produces no event at
+    #   all, and lands in auto_connect_timeout_count instead.
+    # auto_connect_add_failed_count: mgmt Add Device calls that were refused
+    # auto_connect_timeout_count:    devices added that never connected before the
+    #   CONNECT phase ended (neither Connected nor Connect Failed). Without this
+    #   those devices were missing from the arithmetic and added never reconciled
+    #   with connected + failed.
+    #
+    # Direct-connect counters, for the private-address devices mgmt Add Device
+    # cannot accept (see BlueHydra::LeConnect):
+    # le_direct_connected_count: direct connects that raised a link
+    # le_direct_failed_count:    direct connects that did not (unreachable/error)
+    # le_direct_dropped_count:   requests discarded from a full backlog, never tried
+    # le_direct_abandoned_count: connects still in flight when the discovery-off
+    #   budget ran out. Distinct from failed on purpose: a rising number here means
+    #   the budget is the binding constraint, not that devices are unreachable.
     @auto_connect_added_count         = 0
     @auto_connect_connected_count     = 0
     @auto_connect_failed_count        = 0
+    @auto_connect_add_failed_count    = 0
+    @auto_connect_timeout_count       = 0
+    @le_direct_connected_count        = 0
+    @le_direct_failed_count           = 0
+    @le_direct_dropped_count          = 0
+    @le_direct_abandoned_count        = 0
+    @le_direct_error_count            = 0
 
     class << self
       attr_accessor :multi_address_chunk_count,
@@ -43,7 +67,14 @@ module BlueHydra
                     :truncation_detected_count,
                     :auto_connect_added_count,
                     :auto_connect_connected_count,
-                    :auto_connect_failed_count
+                    :auto_connect_failed_count,
+                    :auto_connect_add_failed_count,
+                    :auto_connect_timeout_count,
+                    :le_direct_connected_count,
+                    :le_direct_failed_count,
+                    :le_direct_dropped_count,
+                    :le_direct_abandoned_count,
+                    :le_direct_error_count
     end
 
     # Increment helpers. Each counter has a single writer thread (the chunker
@@ -75,6 +106,34 @@ module BlueHydra
 
     def self.increment_auto_connect_failed_count
       @auto_connect_failed_count += 1
+    end
+
+    def self.increment_auto_connect_add_failed_count
+      @auto_connect_add_failed_count += 1
+    end
+
+    def self.increment_auto_connect_timeout_count
+      @auto_connect_timeout_count += 1
+    end
+
+    def self.increment_le_direct_connected_count
+      @le_direct_connected_count += 1
+    end
+
+    def self.increment_le_direct_failed_count
+      @le_direct_failed_count += 1
+    end
+
+    def self.increment_le_direct_dropped_count
+      @le_direct_dropped_count += 1
+    end
+
+    def self.increment_le_direct_abandoned_count
+      @le_direct_abandoned_count += 1
+    end
+
+    def self.increment_le_direct_error_count
+      @le_direct_error_count += 1
     end
 
     # This method initializes with a runner and some data and then handles

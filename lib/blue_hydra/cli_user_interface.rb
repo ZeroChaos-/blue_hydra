@@ -63,6 +63,24 @@ module BlueHydra
       @runner.query_history
     end
 
+    # First-line label naming the transports actually being discovered, e.g.
+    # "BREDR+LE devices seen in last 300s".
+    #
+    # A controller with LE supported but switched off can only ever report
+    # classic devices, and from the table alone that looks like a quiet room
+    # rather than a half-blind sensor. Naming the transports puts it in front of
+    # an interactive user the way the log line and event do for everyone else.
+    #
+    # Falls back to the original wording while the transports are still unknown
+    # (the discovery thread determines them at startup, so the first paint or two
+    # can land before that).
+    def devices_seen_label
+      transports = @runner.mgmt && @runner.mgmt.enabled_transports
+      return "Devices Seen in last #{cui_timeout}s" if transports.nil?
+      return "NO TRANSPORT ENABLED, nothing can be discovered" if transports.empty?
+      "#{transports.join('+')} devices seen in last #{cui_timeout}s"
+    end
+
     def stop!
       puts "Exiting......."
       # Request the same graceful shutdown as Ctrl-C instead of exiting here.
@@ -401,7 +419,7 @@ HELP
         if BlueHydra.config["file"]
           pbuff << "Reading data from " + BlueHydra.config["file"]
         else
-          pbuff <<  "Devices Seen in last #{cui_timeout}s"
+          pbuff << devices_seen_label
         end
         pbuff << ", processing_speed: #{@runner.processing_speed.round}/s, DB Stunned: #{@runner.stunned}"
         pbuff << "\n"
@@ -429,9 +447,36 @@ HELP
                    "zero-address: #{BlueHydra::CliUserInterfaceTracker.zero_address_chunk_count}, " \
                    "truncation-detected: #{BlueHydra::CliUserInterfaceTracker.truncation_detected_count}\n"
           lines += 1
+          # Every add should end up in exactly one of connected / failed /
+          # timeout, so added == connected + failed + timeout is the invariant to
+          # watch. connected counts EVENTS though, and the kernel re-connects a
+          # device on every advertisement until it is removed, so a handful of
+          # chatty devices can push it above added on its own.
           pbuff << "Auto-connect: added: #{BlueHydra::CliUserInterfaceTracker.auto_connect_added_count}, " \
                    "connected: #{BlueHydra::CliUserInterfaceTracker.auto_connect_connected_count}, " \
-                   "failed: #{BlueHydra::CliUserInterfaceTracker.auto_connect_failed_count}\n"
+                   "failed: #{BlueHydra::CliUserInterfaceTracker.auto_connect_failed_count}, " \
+                   "timeout: #{BlueHydra::CliUserInterfaceTracker.auto_connect_timeout_count}, " \
+                   "add-err: #{BlueHydra::CliUserInterfaceTracker.auto_connect_add_failed_count}\n"
+          lines += 1
+          # Private-address devices, which the kernel auto-connect list refuses -
+          # we connect to those ourselves. Usually the larger population.
+          # Discovery re-arm health. skipped climbing means the controller is being
+          # asked to stop discovery far more often than the rate limit answers,
+          # which is the signature of a connect fighting the scan (the thrash an
+          # on-device capture showed as Discovering=0 then Start Discovery 1ms
+          # later, repeatedly).
+          if runner.mgmt
+            pbuff << "Discovery re-arm: issued: #{runner.mgmt.rearm_count}, " \
+                     "rate-limited: #{runner.mgmt.rearm_skipped_count}, " \
+                     "off-for: #{'%.1f' % runner.mgmt.discovery_off_for}s\n"
+            lines += 1
+          end
+          pbuff << "Direct LE: connected: #{BlueHydra::CliUserInterfaceTracker.le_direct_connected_count}, " \
+                   "unreachable: #{BlueHydra::CliUserInterfaceTracker.le_direct_failed_count}, " \
+                   "error: #{BlueHydra::CliUserInterfaceTracker.le_direct_error_count}, " \
+                   "abandoned: #{BlueHydra::CliUserInterfaceTracker.le_direct_abandoned_count}, " \
+                   "dropped: #{BlueHydra::CliUserInterfaceTracker.le_direct_dropped_count}, " \
+                   "queued: #{runner.le_direct_pending ? runner.le_direct_pending.size : 0}\n"
           lines += 1
         end
 

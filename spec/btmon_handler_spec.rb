@@ -73,6 +73,53 @@ describe BlueHydra::BtmonHandler do
     it "drops the monitor version banner" do
       expect(enqueued?(["Bluetooth monitor ver 5.72\r\n"])).to eq(false)
     end
+
+    # btmon decodes connection payloads instead of hex-dumping them, and the
+    # decoded L2CAP field names collide with device attributes the parser stores.
+    # See BtmonHandler::ACL_DATA_RE.
+    it "drops connection payload (ACL/SCO/ISO data) messages" do
+      l2cap_info_response = [
+        "> BR-ACL: Handle 256 [04:70:56:7F:EC:E9 (Arcadyan)] flags 0x02 dlen 16\r\n",
+        "      L2CAP: Information Response (0x0b) ident 1 len 8\r\n",
+        "        Features: 0x000000b8\r\n",
+        "          Enhanced Retransmission Mode\r\n",
+        "          Streaming Mode\r\n"
+      ]
+      expect(enqueued?(l2cap_info_response)).to eq(false)
+
+      expect(enqueued?(["> LE-ACL: Handle 2048 [AA:BB:CC:DD:EE:FF] flags 0x02 dlen 7\r\n",
+                        "      ATT: Read Request (0x0a) len 2\r\n"])).to eq(false)
+      # the older directional spelling, still used for SCO/ISO
+      expect(enqueued?(["> ACL Data RX: Handle 256 flags 0x02 dlen 10\r\n"])).to eq(false)
+      expect(enqueued?(["> SCO Data RX: Handle 257 flags 0x00 dlen 48\r\n"])).to eq(false)
+      expect(enqueued?(["> ISO Data RX: Handle 258 flags 0x00 dlen 20\r\n"])).to eq(false)
+      expect(enqueued?(["> ISO Data: Handle 258 flags 0x00 dlen 20\r\n"])).to eq(false)
+
+      # and a real HCI event still gets through, i.e. the rule is not too greedy
+      expect(enqueued?(["> HCI Event: Extended Inquiry Result (0x2f) plen 255\r\n",
+                        "        Address: AA:BB:CC:DD:EE:FF\r\n"])).to eq(true)
+    end
+
+    # the exact corruption this drop exists to prevent: those L2CAP "Features:"
+    # lines are stored by the parser as the DEVICE's LMP feature set
+    it "keeps L2CAP channel features out of the device's feature attributes" do
+      chunk = [
+        "      L2CAP: Information Response (0x0b) ident 1 len 8\r\n",
+        "        Features: 0x000000b8\r\n",
+        "          Enhanced Retransmission Mode\r\n",
+        "          Streaming Mode\r\n",
+        "last_seen: #{Time.now.to_i}"
+      ]
+      # shown against the parser directly, since the point is what WOULD happen
+      # if such a message ever reached it
+      parser = BlueHydra::Parser.new([["> BR-ACL: Handle 256 [AA:BB:CC:DD:EE:FF] dlen 16\r\n"] + chunk])
+      parser.parse
+      expect(parser.attributes[:classic_features])
+        .to eq(["Enhanced Retransmission Mode, Streaming Mode"])
+
+      # ...which is why the handler never lets one through
+      expect(enqueued?(["> BR-ACL: Handle 256 [AA:BB:CC:DD:EE:FF] dlen 16\r\n"] + chunk[0..-2])).to eq(false)
+    end
   end
 
   describe "btmon --color=never handling" do

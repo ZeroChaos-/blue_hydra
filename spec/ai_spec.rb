@@ -674,11 +674,16 @@ describe "BlueHydra::Chunker dispatch" do
   end
 
   def nonstarting_msg(addr)
-    # Max Slots Change (0x1b) is address-bearing but NOT a chunk-start code, so
-    # it merges into the current working set. (Disconnect Complete 0x05 used to
-    # be used here but is now a start code - see Chunker::HCI_EVENT_START_CODES.)
+    # Encryption Change (0x08) is address-bearing but NOT a chunk-start code, so
+    # it merges into the current working set - which is the only property these
+    # specs need from it.
+    #
+    # Third event to hold this role: Disconnect Complete (0x05) and then Max Slots
+    # Change (0x1b) both became start codes as address-bearing events were found
+    # merging devices together. See Chunker::HCI_EVENT_START_CODES.
     [
-      "> HCI Event: Max Slots Change (0x1b) plen 3          2015-12-10 11:30:58.970878\r\n",
+      "> HCI Event: Encryption Change (0x08) plen 4          2015-12-10 11:30:58.970878\r\n",
+      "        Status: Success (0x00)\r\n",
       "        Handle: 256 Address: #{addr} (Apple)\r\n"
     ]
   end
@@ -844,15 +849,332 @@ describe "BlueHydra::Runner helpers" do
     runner = BlueHydra::Runner.new
     runner.auto_connect_list = {}
     runner.le_pending = {}
+    runner.le_direct_pending = {}
     fake_mgmt = double("mgmt")
     allow(fake_mgmt).to receive(:add_device).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
     runner.mgmt = fake_mgmt
 
-    runner.request_leinfo("AA:BB:CC:DD:EE:40", "Random")
+    # CA: is a random STATIC address (top two bits of the first octet set), which
+    # is what mgmt Add Device requires. A random address without those bits is
+    # private and takes the direct-connect path instead (see the specs below).
+    runner.request_leinfo("CA:BB:CC:DD:EE:40", "Random")
 
-    expect(runner.auto_connect_list).to have_key("AA:BB:CC:DD:EE:40")
+    expect(runner.auto_connect_list).to have_key("CA:BB:CC:DD:EE:40")
     expect(runner.le_pending).to be_empty
-    expect(fake_mgmt).to have_received(:add_device).with("AA:BB:CC:DD:EE:40", BlueHydra::Mgmt::LE_RANDOM)
+    expect(runner.le_direct_pending).to be_empty
+    expect(fake_mgmt).to have_received(:add_device).with("CA:BB:CC:DD:EE:40", BlueHydra::Mgmt::LE_RANDOM)
+  end
+
+  describe "private-address LE devices (direct connect path)" do
+    let(:fake_mgmt) do
+      m = double("mgmt")
+      allow(m).to receive(:add_device).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+      # the phase reads the real off-time for its deadline and puts discovery back
+      # on when it exits
+      allow(m).to receive(:discovery_off_for).and_return(0.0)
+      allow(m).to receive(:start_discovery).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+      m
+    end
+
+    def runner_with_lists
+      runner = BlueHydra::Runner.new
+      runner.auto_connect_list  = {}
+      runner.le_pending         = {}
+      runner.le_direct_pending  = {}
+      runner.mgmt               = fake_mgmt
+      runner
+    end
+
+    # 0x7A -> top two bits 01: a resolvable private address.
+    # 0x18 -> top two bits 00: a non-resolvable private address.
+    # Neither can be given to mgmt Add Device, so neither may reach it.
+    ["7A:BB:CC:DD:EE:01", "18:BB:CC:DD:EE:02"].each do |address|
+      it "routes #{address} to the direct-connect queue instead of Add Device" do
+        runner = runner_with_lists
+
+        runner.request_leinfo(address, "Random")
+
+        expect(runner.le_direct_pending).to have_key(address)
+        expect(runner.auto_connect_list).to be_empty
+        expect(runner.le_pending).to be_empty
+        expect(fake_mgmt).not_to have_received(:add_device)
+      end
+    end
+
+    it "records the mgmt address type so the connect uses the LE random path" do
+      runner = runner_with_lists
+      runner.request_leinfo("7A:BB:CC:DD:EE:01", "Random")
+      expect(runner.le_direct_pending["7A:BB:CC:DD:EE:01"]).to eq(BlueHydra::Mgmt::LE_RANDOM)
+    end
+
+    it "re-sighting an address refreshes its queue position rather than duplicating it" do
+      runner = runner_with_lists
+      runner.request_leinfo("7A:00:00:00:00:01", "Random")
+      runner.request_leinfo("7A:00:00:00:00:02", "Random")
+      runner.request_leinfo("7A:00:00:00:00:01", "Random")
+
+      expect(runner.le_direct_pending.size).to eq(2)
+      # the re-sighted address moves to the back (freshest last)
+      expect(runner.le_direct_pending.keys.last).to eq("7A:00:00:00:00:01")
+    end
+
+    it "drops the oldest entry when the backlog is full and counts the drop" do
+      runner = runner_with_lists
+      limit  = BlueHydra::Runner::LE_DIRECT_PENDING_LIMIT
+      before = BlueHydra::CliUserInterfaceTracker.le_direct_dropped_count
+
+      (limit + 1).times { |i| runner.request_leinfo("7A:00:00:%02X:%02X:%02X" % [i / 65536, (i / 256) % 256, i % 256], "Random") }
+
+      expect(runner.le_direct_pending.size).to eq(limit)
+      expect(BlueHydra::CliUserInterfaceTracker.le_direct_dropped_count).to eq(before + 1)
+      # the first one queued is the one that went
+      expect(runner.le_direct_pending).not_to have_key("7A:00:00:00:00:00")
+    end
+
+    it "next_le_direct_batch takes at most the configured parallel count, oldest first" do
+      runner = runner_with_lists
+      total  = BlueHydra::Runner::LE_DIRECT_CONNECT_PARALLEL + 3
+      total.times { |i| runner.request_leinfo("7A:00:00:00:00:%02X" % i, "Random") }
+
+      batch = runner.next_le_direct_batch
+
+      expect(batch.size).to eq(BlueHydra::Runner::LE_DIRECT_CONNECT_PARALLEL)
+      expect(batch.keys.first).to eq("7A:00:00:00:00:00")
+      # taken entries leave the backlog, so the next batch makes progress
+      expect(runner.le_direct_pending.size).to eq(3)
+      expect(runner.le_direct_pending).not_to have_key("7A:00:00:00:00:00")
+    end
+
+    # The phase itself, not just its parts: a wiring bug here (no deadline, no
+    # discovery suppression, a batch that never drains) only shows up on hardware.
+    describe "le_direct_connect_phase" do
+      def runner_for_phase(device_count)
+        runner = runner_with_lists
+        device_count.times { |i| runner.request_leinfo("7A:00:00:00:%02X:%02X" % [i / 256, i % 256], "Random") }
+        allow(runner).to receive(:disable_scan_before_connect)
+        allow(runner).to receive(:resume_discovery_if_over_budget) { |off_since| off_since }
+        runner
+      end
+
+      it "drains the whole backlog in batches and suppresses discovery for each" do
+        runner  = runner_for_phase(BlueHydra::Runner::LE_DIRECT_CONNECT_PARALLEL + 2)
+        batches = []
+        fake_connect = double("le_connect")
+        allow(fake_connect).to receive(:connect_batch) do |entries, _deadline|
+          batches << entries.keys
+          entries.transform_values { :connected }
+        end
+        runner.le_connect = fake_connect
+
+        runner.le_direct_connect_phase
+
+        expect(runner.le_direct_pending).to be_empty
+        expect(batches.size).to eq(2)
+        expect(batches.first.size).to eq(BlueHydra::Runner::LE_DIRECT_CONNECT_PARALLEL)
+        expect(batches.last.size).to eq(2)
+        # discovery must be off for every batch, not just the first
+        expect(runner).to have_received(:disable_scan_before_connect).twice
+      end
+
+      it "gives each batch a deadline inside the discovery-off budget" do
+        runner    = runner_for_phase(2)
+        deadlines = []
+        fake_connect = double("le_connect")
+        allow(fake_connect).to receive(:connect_batch) do |entries, deadline|
+          deadlines << deadline
+          entries.transform_values { :connected }
+        end
+        runner.le_connect = fake_connect
+
+        started = Time.now
+        runner.le_direct_connect_phase
+
+        expect(deadlines.size).to eq(1)
+        expect(deadlines.first).not_to be_nil
+        # the deadline is the budget from when discovery went off, not open-ended
+        expect(deadlines.first).to be <= (started + BlueHydra::Runner::DISCOVERY_OFF_BUDGET + 1)
+      end
+
+      it "yields the radio back to scanning between batches" do
+        runner = runner_for_phase(BlueHydra::Runner::LE_DIRECT_CONNECT_PARALLEL + 1)
+        fake_connect = double("le_connect")
+        allow(fake_connect).to receive(:connect_batch) { |entries, _d| entries.transform_values { :connected } }
+        runner.le_connect = fake_connect
+
+        runner.le_direct_connect_phase
+
+        # once per batch: this is what bounds contiguous discovery-off time
+        expect(runner).to have_received(:resume_discovery_if_over_budget).twice
+      end
+
+      it "always leaves discovery on when it exits" do
+        runner = runner_for_phase(2)
+        fake_connect = double("le_connect")
+        allow(fake_connect).to receive(:connect_batch) { |entries, _d| entries.transform_values { :connected } }
+        runner.le_connect = fake_connect
+
+        runner.le_direct_connect_phase
+
+        # otherwise the off-window just continues into the classic drain
+        expect(fake_mgmt).to have_received(:start_discovery).at_least(:once)
+      end
+
+      it "leaves discovery on even when a batch blows up" do
+        runner = runner_for_phase(2)
+        fake_connect = double("le_connect")
+        allow(fake_connect).to receive(:connect_batch).and_raise("radio on fire")
+        runner.le_connect = fake_connect
+
+        expect { runner.le_direct_connect_phase }.to raise_error(/radio on fire/)
+        expect(fake_mgmt).to have_received(:start_discovery).at_least(:once)
+      end
+
+      it "shortens the batch deadline by time discovery was already off" do
+        runner = runner_for_phase(2)
+        # a previous phase already spent 5 of the 6 second budget
+        allow(fake_mgmt).to receive(:discovery_off_for).and_return(5.0)
+        deadlines = []
+        fake_connect = double("le_connect")
+        allow(fake_connect).to receive(:connect_batch) do |entries, deadline|
+          deadlines << deadline
+          entries.transform_values { :connected }
+        end
+        runner.le_connect = fake_connect
+
+        started = Time.now
+        runner.le_direct_connect_phase
+
+        # roughly one second left, not a fresh six
+        expect(deadlines.first - started).to be < 2.0
+      end
+
+      it "never hands out a zero or negative deadline" do
+        runner = runner_for_phase(2)
+        # budget already blown through
+        allow(fake_mgmt).to receive(:discovery_off_for).and_return(60.0)
+        deadlines = []
+        fake_connect = double("le_connect")
+        allow(fake_connect).to receive(:connect_batch) do |entries, deadline|
+          deadlines << deadline
+          entries.transform_values { :abandoned }
+        end
+        runner.le_connect = fake_connect
+
+        started = Time.now
+        runner.le_direct_connect_phase
+
+        # a floor keeps the batch from being abandoned before it can start
+        expect(deadlines.first).to be > started
+      end
+
+      it "counts abandoned devices so a spent budget is visible" do
+        runner = runner_for_phase(2)
+        fake_connect = double("le_connect")
+        allow(fake_connect).to receive(:connect_batch) { |entries, _d| entries.transform_values { :abandoned } }
+        runner.le_connect = fake_connect
+        before = BlueHydra::CliUserInterfaceTracker.le_direct_abandoned_count
+
+        runner.le_direct_connect_phase
+
+        expect(BlueHydra::CliUserInterfaceTracker.le_direct_abandoned_count).to eq(before + 2)
+      end
+    end
+
+    it "counts a direct-connect batch's outcomes" do
+      runner    = runner_with_lists
+      connected = BlueHydra::CliUserInterfaceTracker.le_direct_connected_count
+      failed    = BlueHydra::CliUserInterfaceTracker.le_direct_failed_count
+
+      errored = BlueHydra::CliUserInterfaceTracker.le_direct_error_count
+
+      runner.record_le_direct_results(
+        "7A:00:00:00:00:01" => :connected,
+        "7A:00:00:00:00:02" => :unreachable,
+        "7A:00:00:00:00:03" => :error
+      )
+
+      expect(BlueHydra::CliUserInterfaceTracker.le_direct_connected_count).to eq(connected + 1)
+      # a local socket error is counted apart from "asked and got no answer"
+      expect(BlueHydra::CliUserInterfaceTracker.le_direct_failed_count).to eq(failed + 1)
+      expect(BlueHydra::CliUserInterfaceTracker.le_direct_error_count).to eq(errored + 1)
+    end
+  end
+
+  describe "discovery-off budget accounting" do
+    def runner_with_mgmt(off_for)
+      runner = BlueHydra::Runner.new
+      m = double("mgmt")
+      allow(m).to receive(:discovery_off_for).and_return(off_for)
+      allow(m).to receive(:start_discovery).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+      runner.mgmt = m
+      allow(runner).to receive(:sleep)
+      runner
+    end
+
+    it "does not yield while discovery has been off less than the budget" do
+      runner = runner_with_mgmt(1.0)
+      off_since = Time.now
+      expect(runner.resume_discovery_if_over_budget(off_since)).to eq(off_since)
+      expect(runner.mgmt).not_to have_received(:start_discovery)
+    end
+
+    it "yields once discovery has been off longer than the budget" do
+      runner = runner_with_mgmt(BlueHydra::Runner::DISCOVERY_OFF_BUDGET + 1)
+      runner.resume_discovery_if_over_budget(Time.now)
+      expect(runner.mgmt).to have_received(:start_discovery)
+    end
+
+    # The bug this replaced: a phase timed from its own entry, so time an earlier
+    # phase had already spent with discovery off was invisible and the budget was
+    # effectively granted twice over.
+    it "measures against the kernel's off-time, not the caller's clock" do
+      runner = runner_with_mgmt(BlueHydra::Runner::DISCOVERY_OFF_BUDGET + 5)
+      # caller's own reference point says no time has passed at all
+      runner.resume_discovery_if_over_budget(Time.now)
+      expect(runner.mgmt).to have_received(:start_discovery)
+    end
+
+    it "falls back to the caller's clock when mgmt is unavailable" do
+      runner = BlueHydra::Runner.new
+      runner.mgmt = nil
+      off_since = Time.now
+      # under budget by the caller's clock, and no mgmt to consult
+      expect(runner.resume_discovery_if_over_budget(off_since)).to eq(off_since)
+    end
+  end
+
+  it "connect_phase leaves discovery on when it exits" do
+    runner = BlueHydra::Runner.new
+    runner.auto_connect_list = {}
+    m = double("mgmt")
+    allow(m).to receive(:start_discovery).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+    allow(m).to receive(:connection_events).and_return(Queue.new)
+    runner.mgmt = m
+    allow(runner).to receive(:disable_scan_before_connect)
+    allow(runner).to receive(:drain_connection_events)
+
+    runner.connect_phase
+
+    expect(m).to have_received(:start_discovery)
+  end
+
+  it "clear_auto_connect counts adds that never connected as timeouts" do
+    runner = BlueHydra::Runner.new
+    fake_mgmt = double("mgmt")
+    allow(fake_mgmt).to receive(:remove_device).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+    runner.mgmt = fake_mgmt
+    runner.auto_connect_list = {
+      "AA:BB:CC:DD:EE:01" => { address_type: BlueHydra::Mgmt::LE_RANDOM, added_at: Time.now, connected: true },
+      "AA:BB:CC:DD:EE:02" => { address_type: BlueHydra::Mgmt::LE_RANDOM, added_at: Time.now, connected: false },
+      "AA:BB:CC:DD:EE:03" => { address_type: BlueHydra::Mgmt::LE_RANDOM, added_at: Time.now, connected: false }
+    }
+    before = BlueHydra::CliUserInterfaceTracker.auto_connect_timeout_count
+
+    runner.clear_auto_connect
+
+    # only the two that never connected count as timed out
+    expect(BlueHydra::CliUserInterfaceTracker.auto_connect_timeout_count).to eq(before + 2)
+    expect(runner.auto_connect_list).to be_empty
   end
 
   it "request_leinfo holds a device in le_pending when full and never loses it" do
@@ -895,6 +1217,10 @@ describe "BlueHydra::Runner helpers" do
     allow(m).to receive(:add_device).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
     allow(m).to receive(:remove_device).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
     allow(m).to receive(:stop_discovery).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+    # connect_phase now puts discovery back on when it exits, and reads the real
+    # off-time rather than timing itself
+    allow(m).to receive(:start_discovery).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
+    allow(m).to receive(:discovery_off_for).and_return(0.0)
     [m, events]
   end
 
@@ -990,32 +1316,9 @@ describe "BlueHydra::Runner helpers" do
     expect(fake_mgmt).to have_received(:remove_device).with("AA:BB:CC:DD:EE:74", BlueHydra::Mgmt::LE_PUBLIC)
   end
 
-  it "resume_discovery_if_over_budget yields to discovery once the off budget is exceeded" do
-    runner = BlueHydra::Runner.new
-    fake_mgmt = double("mgmt")
-    allow(fake_mgmt).to receive(:start_discovery).and_return(BlueHydra::Mgmt::STATUS_SUCCESS)
-    runner.mgmt = fake_mgmt
-    allow(runner).to receive(:sleep) # skip the resume-window delay
-
-    old = Time.now - (BlueHydra::Runner::DISCOVERY_OFF_BUDGET + 1)
-    new_off = runner.resume_discovery_if_over_budget(old)
-
-    expect(fake_mgmt).to have_received(:start_discovery)
-    expect(new_off).to be > old
-  end
-
-  it "resume_discovery_if_over_budget does not yield when under the off budget" do
-    runner = BlueHydra::Runner.new
-    fake_mgmt = double("mgmt")
-    allow(fake_mgmt).to receive(:start_discovery)
-    runner.mgmt = fake_mgmt
-
-    recent = Time.now
-    result = runner.resume_discovery_if_over_budget(recent)
-
-    expect(fake_mgmt).not_to have_received(:start_discovery)
-    expect(result).to eq(recent)
-  end
+  # resume_discovery_if_over_budget is covered by the "discovery-off budget
+  # accounting" describe block above, which also pins down that the elapsed time
+  # comes from the kernel's off-time rather than the caller's clock.
 
   it "scan_phase adds pending devices up to CONNECT_PENDING_LIMIT then stops" do
     stub_const("BlueHydra::Runner::CONNECT_PENDING_LIMIT", 2)
@@ -1434,5 +1737,180 @@ describe "test database isolation" do
     end
 
     expect(after).to eq(before)
+  end
+end
+
+# Discovery is the whole job: a controller that will not start it produces no
+# data at all. A DART sat in exactly that state - LE disabled, every Start
+# Discovery answered REJECTED - looking alive while seeing nothing. That is the
+# failure this turns into a loud exit rather than a log line in a running
+# process.
+describe "BlueHydra::Runner discovery failure handling" do
+  let(:runner) { BlueHydra::Runner.new }
+
+  before do
+    allow(BlueHydra.logger).to receive(:fatal)
+    allow(BlueHydra.logger).to receive(:warn)
+    allow(BlueHydra).to receive(:send_event)
+    allow(runner).to receive(:puts) # daemon_mode is false under test
+  end
+
+  def expect_exit_1
+    expect { yield }.to raise_error(SystemExit) { |e| expect(e.status).to eq(1) }
+  end
+
+  it "logs fatal, notifies, and exits non-zero" do
+    expect_exit_1 { runner.discovery_failed_fatal(BlueHydra::Mgmt::STATUS_REJECTED) }
+
+    expect(BlueHydra.logger).to have_received(:fatal)
+      .with(/start discovery failed.*0x0b \(REJECTED\)/)
+    expect(BlueHydra).to have_received(:send_event).with(
+      'blue_hydra',
+      hash_including(key: 'blue_hydra_start_discovery_failed', severity: 'FATAL')
+    )
+  end
+
+  it "distinguishes a first-cycle failure from two in a row" do
+    expect_exit_1 { runner.discovery_failed_fatal(BlueHydra::Mgmt::STATUS_REJECTED) }
+    expect(BlueHydra.logger).to have_received(:fatal).with(/on the first discovery cycle/)
+
+    expect_exit_1 { runner.discovery_failed_fatal(BlueHydra::Mgmt::STATUS_BUSY, retried: true) }
+    expect(BlueHydra.logger).to have_received(:fatal).with(/twice in a row/)
+  end
+
+  # One failure is a transient issue; two in a row is a pattern. But on the very
+  # first cycle nothing has ever worked, so there is nothing to call transient -
+  # that is the DART case, which ran for hours answering REJECTED to everything.
+  describe "retry policy" do
+    before do
+      allow(BlueHydra.logger).to receive(:info)
+      allow(runner).to receive(:sleep) # don't actually wait in the suite
+    end
+
+    it "is fatal on the first cycle without retrying" do
+      mgmt = instance_double(
+        BlueHydra::Mgmt,
+        enabled_transports: ["BREDR"],
+        start_discovery: BlueHydra::Mgmt::STATUS_SUCCESS # would rescue it, if reached
+      )
+      runner.mgmt = mgmt
+
+      expect_exit_1 { runner.retry_start_discovery(BlueHydra::Mgmt::STATUS_REJECTED) }
+
+      expect(mgmt).not_to have_received(:start_discovery)
+      expect(runner).not_to have_received(:sleep)
+      expect(BlueHydra.logger).to have_received(:fatal).with(/on the first discovery cycle/)
+    end
+
+    it "retries once after a pause and carries on when the retry works" do
+      runner.instance_variable_set(:@discovery_ever_started, true)
+      runner.mgmt = instance_double(
+        BlueHydra::Mgmt,
+        enabled_transports: ["BREDR", "LE"],
+        start_discovery: BlueHydra::Mgmt::STATUS_SUCCESS
+      )
+
+      status = runner.retry_start_discovery(BlueHydra::Mgmt::STATUS_BUSY)
+
+      expect(status).to eq(BlueHydra::Mgmt::STATUS_SUCCESS)
+      expect(runner).to have_received(:sleep).with(BlueHydra::Runner::START_DISCOVERY_RETRY_DELAY)
+      expect(BlueHydra.logger).to have_received(:warn).with(/retrying once in 8s/)
+      expect(BlueHydra.logger).to have_received(:info).with(/recovered on retry/)
+    end
+
+    it "is fatal when the retry fails too" do
+      runner.instance_variable_set(:@discovery_ever_started, true)
+      runner.mgmt = instance_double(
+        BlueHydra::Mgmt,
+        enabled_transports: ["BREDR"],
+        start_discovery: BlueHydra::Mgmt::STATUS_REJECTED
+      )
+
+      expect_exit_1 { runner.retry_start_discovery(BlueHydra::Mgmt::STATUS_REJECTED) }
+
+      expect(runner).to have_received(:sleep).once
+      expect(BlueHydra.logger).to have_received(:fatal).with(/twice in a row/)
+      expect(BlueHydra).to have_received(:send_event).with(
+        'blue_hydra',
+        hash_including(key: 'blue_hydra_start_discovery_failed', severity: 'FATAL')
+      )
+    end
+
+    # At least 6s so a busy controller has a real chance to answer, no more than
+    # 10s so a dead unit is not left sitting there.
+    it "waits between 6 and 10 seconds before the retry" do
+      expect(BlueHydra::Runner::START_DISCOVERY_RETRY_DELAY).to be_between(6, 10)
+    end
+  end
+
+  it "records which transports were enabled when it failed" do
+    runner.mgmt = instance_double(BlueHydra::Mgmt, enabled_transports: ["BREDR"])
+    expect_exit_1 { runner.discovery_failed_fatal(BlueHydra::Mgmt::STATUS_REJECTED) }
+    expect(BlueHydra.logger).to have_received(:fatal)
+      .with(/enabled transports at the time of failure: BREDR/)
+  end
+
+  it "says none when the controller had no transport enabled" do
+    runner.mgmt = instance_double(BlueHydra::Mgmt, enabled_transports: [])
+    expect_exit_1 { runner.discovery_failed_fatal(BlueHydra::Mgmt::STATUS_REJECTED) }
+    expect(BlueHydra.logger).to have_received(:fatal)
+      .with(/enabled transports at the time of failure: none/)
+  end
+
+  # Mid-cycle resumes are a different case: the cycle's own start_discovery
+  # already succeeded, so a refusal here is new and most likely the controller
+  # busy servicing a connect. If it is not transient, the next cycle's start is
+  # where it becomes fatal.
+  it "only warns when a mid-cycle resume is refused" do
+    runner.warn_resume_failed("after connect phase", BlueHydra::Mgmt::STATUS_BUSY)
+    expect(BlueHydra.logger).to have_received(:warn)
+      .with(/resume discovery after connect phase failed.*BUSY/)
+    expect(BlueHydra).not_to have_received(:send_event)
+  end
+
+  it "says nothing when a resume succeeds" do
+    runner.warn_resume_failed("mid-drain", BlueHydra::Mgmt::STATUS_SUCCESS)
+    expect(BlueHydra.logger).not_to have_received(:warn)
+  end
+end
+
+# A controller with LE switched off can only ever report classic devices, and
+# from the device table alone that looks like a quiet room rather than a
+# half-blind sensor. The first line names the transports so an interactive user
+# sees it the way the log line and the event show everyone else.
+describe "BlueHydra::CliUserInterface transport labelling" do
+  class LabelFakeRunner
+    attr_accessor :mgmt
+  end
+
+  def cui_with(transports)
+    runner = LabelFakeRunner.new
+    runner.mgmt = transports == :no_mgmt ? nil :
+                  instance_double(BlueHydra::Mgmt, enabled_transports: transports)
+    BlueHydra::CliUserInterface.new(runner, 300)
+  end
+
+  it "names both transports when both are discovered" do
+    expect(cui_with(["BREDR", "LE"]).devices_seen_label)
+      .to eq("BREDR+LE devices seen in last 300s")
+  end
+
+  it "names only BREDR when LE is off" do
+    expect(cui_with(["BREDR"]).devices_seen_label).to eq("BREDR devices seen in last 300s")
+  end
+
+  it "names only LE on a single-mode LE controller" do
+    expect(cui_with(["LE"]).devices_seen_label).to eq("LE devices seen in last 300s")
+  end
+
+  it "says outright that nothing can be discovered when no transport is on" do
+    expect(cui_with([]).devices_seen_label).to eq("NO TRANSPORT ENABLED, nothing can be discovered")
+  end
+
+  # The discovery thread determines the transports at startup, so the first paint
+  # or two can land before that; keep the original wording rather than guessing.
+  it "keeps the original wording while the transports are unknown" do
+    expect(cui_with(nil).devices_seen_label).to eq("Devices Seen in last 300s")
+    expect(cui_with(:no_mgmt).devices_seen_label).to eq("Devices Seen in last 300s")
   end
 end

@@ -26,12 +26,13 @@ describe BlueHydra::Chunker do
 
     nope1 = ["Bluetooth monitor ver 5.35\r\n"]
     nope2 = ["= New Index: 5C:C5:D4:11:33:79 (BR/EDR,USB,hci1)     2015-12-10 11:29:46.064195\r\n"]
-    # Max Slots Change (0x1b) is address-bearing but not a chunk-start code.
-    # (Disconnect Complete 0x05 was here before but is now a start - see
-    # Chunker::HCI_EVENT_START_CODES.)
-    nope3 = ["> HCI Event: Max Slots Change (0x1b) plen 3          2015-12-10 11:30:58.970878\r\n",
+    # Encryption Change (0x08) is address-bearing but not a chunk-start code.
+    # (Disconnect Complete 0x05 and then Max Slots Change 0x1b were both here
+    # before and are now starts - see Chunker::HCI_EVENT_START_CODES.)
+    nope3 = ["> HCI Event: Encryption Change (0x08) plen 4         2015-12-10 11:30:58.970878\r\n",
+             "        Status: Success (0x00)\r\n",
              "        Handle: 3585\r\n",
-             "        Max slots: 5\r\n"]
+             "        Encryption: Enabled with E0 (0x01)\r\n"]
 
     q1 = Queue.new
     q2 = Queue.new
@@ -155,15 +156,20 @@ describe BlueHydra::Chunker do
        "        Address: #{mac} (OUI AA-BB-CC)\r\n"]
     end
 
-    # a NON-start address-bearing event (Max Slots Change, 0x1b) whose
-    # new-format line carries an address, so it merges into the current chunk
-    # and adds an address line. (The Read Remote Supported/Version/Extended
-    # Features events are now chunk starts - see HCI_EVENT_START_CODES - so they
-    # no longer merge; Max Slots Change is used here to still exercise merging.)
+    # a NON-start address-bearing event (Encryption Change, 0x08) whose
+    # new-format line carries an address, so it merges into the current chunk and
+    # adds an address line.
+    #
+    # This helper has been repointed twice as the start list grew: the Read Remote
+    # Supported/Version/Extended Features events became starts, then Max Slots
+    # Change (0x1b) did too. 0x08 is the current stand-in for "address-bearing but
+    # not a start", which is the condition these merge/discard specs exist to
+    # exercise - not any property of Encryption Change itself.
     def merged_address_event(mac)
-      ["> HCI Event: Max Slots Change (0x1b) plen 3   #2 2026-07-28 16:07:00.200000\r\n",
+      ["> HCI Event: Encryption Change (0x08) plen 4   #2 2026-07-28 16:07:00.200000\r\n",
+       "        Status: Success (0x00)\r\n",
        "        Handle: 256 Address: #{mac} (OUI AA-BB-CC)\r\n",
-       "        Max slots: 5\r\n"]
+       "        Encryption: Enabled with E0 (0x01)\r\n"]
     end
 
     # a start block (Command Complete, 0x0e) with no address line at all
@@ -336,7 +342,89 @@ describe BlueHydra::Chunker do
         expect(chunker.starting_chunk?(read_remote_version("AA:AA:AA:AA:AA:AA"))).to eq(true)    # 0x0c classic
         expect(chunker.starting_chunk?(le_connection_complete("AA:AA:AA:AA:AA:AA"))).to eq(true) # 0x0a LE meta subevent
         # a still-non-start address-bearing event stays merged (the safety net)
-        expect(chunker.starting_chunk?(merged_address_event("AA:AA:AA:AA:AA:AA"))).to eq(false)  # 0x1b Max Slots Change
+        expect(chunker.starting_chunk?(merged_address_event("AA:AA:AA:AA:AA:AA"))).to eq(false)  # 0x08 Encryption Change
+      end
+    end
+
+    # bluez monitor resolves a connection handle and prints "Handle: 256 (BR-ACL)
+    # Address: AA:BB:.." - so these carry an address despite the wire format only
+    # having a handle, and have to start their own chunk like any other
+    # address-bearing event. Found by replaying a 17 hour capture: between them
+    # they produced the 8 multi-address-line chunks that 0x06 did not explain.
+    context "classic handle-resolved events start their own chunk" do
+      def max_slots_change(mac)
+        ["> HCI Event: Max Slots Change (0x1b) plen 3   #20 2026-09-17 16:30:23.993697\r\n",
+         "        Handle: 256 (BR-ACL) Address: #{mac} (Arcadyan Corporation)\r\n",
+         "        Max slots: 5\r\n"]
+      end
+
+      def link_supervision_timeout_changed(mac)
+        ["> HCI Event: Link Supervision Timeout Changed (0x38) plen 4   #21 2026-09-17 16:50:19.360263\r\n",
+         "        Handle: 256 (BR-ACL) Address: #{mac} (Arcadyan Corporation)\r\n",
+         "        Timeout: 5000.000 msec (0x1f40)\r\n"]
+      end
+
+      it "recognizes 0x1b and 0x38 as chunk starts" do
+        chunker = BlueHydra::Chunker.new(Queue.new, Queue.new)
+        expect(chunker.starting_chunk?(max_slots_change("AA:AA:AA:AA:AA:AA"))).to eq(true)
+        expect(chunker.starting_chunk?(link_supervision_timeout_changed("AA:AA:AA:AA:AA:AA"))).to eq(true)
+      end
+
+      it "no longer adds a second address line to a classic connect chunk" do
+        before_count = counter
+        pushed = flush_chunk([inquiry("AA:AA:AA:AA:AA:AA"),
+                              link_supervision_timeout_changed("AA:AA:AA:AA:AA:AA"),
+                              max_slots_change("AA:AA:AA:AA:AA:AA")])
+
+        expect(pushed.size).to eq(3)               # three single-address chunks
+        expect(counter - before_count).to eq(0)    # and no multi-address-line count
+      end
+    end
+
+    # LE Remote Connection Parameter Request: the peer asking to renegotiate an
+    # existing connection. It carries Handle+Address, and with several devices
+    # connected at once it lands in whatever chunk happens to be open. In a 17
+    # hour capture every one of its 109 events merged, and 3 of those merges were
+    # across devices and lost the whole chunk.
+    context "LE Remote Connection Parameter Request (0x06) starts its own chunk" do
+      def le_remote_conn_param_request(mac)
+        ["> HCI Event: LE Meta Event (0x3e) plen 11   #30 2026-09-17 18:10:36.840398\r\n",
+         "        LE Remote Connection Parameter Request (0x06)\r\n",
+         "        Handle: 2049 (LE-ACL) Address: #{mac} (Resolvable)\r\n",
+         "        Min connection interval: 30.00 msec (0x0018)\r\n",
+         "        Max connection interval: 50.00 msec (0x0028)\r\n"]
+      end
+
+      it "is recognized as a chunk start" do
+        chunker = BlueHydra::Chunker.new(Queue.new, Queue.new)
+        expect(chunker.starting_chunk?(le_remote_conn_param_request("AA:AA:AA:AA:AA:AA"))).to eq(true)
+      end
+
+      # the exact shape of the three chunks the capture discarded: an advertising
+      # report for one device followed by a parameter request for another
+      it "does not discard an advertising report because another device renegotiates" do
+        before_count  = counter
+        before_unique = unique_counter
+        pushed = flush_chunk([inquiry("23:65:33:17:33:03"),
+                              le_remote_conn_param_request("47:AB:0F:E7:0D:B2")])
+
+        expect(pushed.size).to eq(2)
+        expect(unique_counter - before_unique).to eq(0) # nothing discarded
+        expect(counter - before_count).to eq(0)
+        joined = pushed.map { |c| c.flatten.join }
+        expect(joined.any? { |c| c.include?("23:65:33:17:33:03") }).to eq(true)
+        expect(joined.any? { |c| c.include?("47:AB:0F:E7:0D:B2") }).to eq(true)
+        expect(BlueHydra).not_to have_received(:send_event)
+          .with('blue_hydra', hash_including(key: 'bluehydra_chunk_2_address'))
+      end
+
+      it "no longer merges a same-device parameter request either" do
+        before_count = counter
+        pushed = flush_chunk([inquiry("AA:AA:AA:AA:AA:AA"),
+                              le_remote_conn_param_request("AA:AA:AA:AA:AA:AA")])
+
+        expect(pushed.size).to eq(2)
+        expect(counter - before_count).to eq(0)
       end
     end
 

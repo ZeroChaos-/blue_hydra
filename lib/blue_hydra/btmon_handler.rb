@@ -26,6 +26,38 @@ module BlueHydra
     # bluez monitor "= ..." notes / index bookkeeping we drop
     NOTE_DROP_RE = /^= (bluetoothd: Unable to|New Index:|Delete Index:|Open Index:|Close Index:|Index Info:|Note:)/.freeze
 
+    # Payload of an established connection. btmon DECODES these (L2CAP / ATT /
+    # SMP) rather than hex-dumping them, and the decoded field names collide with
+    # the parser's device attributes. An L2CAP Information Response carries:
+    #
+    #   > BR-ACL: Handle 256 [04:70:56:7F:EC:E9 (Arcadyan)] flags 0x02 dlen 16
+    #         L2CAP: Information Response (0x0b) ident 1 len 8
+    #           Features: 0x000000b8
+    #             Enhanced Retransmission Mode
+    #             Streaming Mode
+    #
+    # and the parser's "Features:" branch stores that as the DEVICE's LMP feature
+    # set; a Fixed Channels list lands in its channel map the same way. Running
+    # the 876 ACL messages of a 17 hour capture through the real parser set
+    # exactly three device attributes - classic_features,
+    # classic_features_bitmap, classic_channels - and all three were L2CAP
+    # protocol capabilities, nothing about the device.
+    #
+    # They are also not chunk starts, so they merge into whichever chunk is open,
+    # and the address in the header is bracketed so it never counts toward the
+    # chunk's address total: 55 of the 709 chunks carrying one named a different
+    # device than the chunk they joined. So the corruption was not even confined
+    # to the right record.
+    #
+    # Nothing is lost by dropping them. Isolated, they yield those three bogus
+    # attributes and nothing else - no name, no company, no UUIDs. The parser has
+    # no deliberate ATT/L2CAP handling; its /^\s+(LE|ATT|L2CAP)/ branch only
+    # re-groups and falls through to single-line matching.
+    # Covers both spellings bluez monitor uses: the current link-type form
+    # (BR-ACL / LE-ACL) and the older directional form still used for SCO and ISO
+    # ("ACL Data RX", "SCO Data TX", ...).
+    ACL_DATA_RE = /^[<>] (?:BR-ACL|LE-ACL|(?:ACL|SCO|ISO) Data(?: [RT]X)?):/.freeze
+
     # btmon truncates a message name with ".." (and wraps the timestamp onto the
     # next line) when its column width is too small, e.g. run with --columns 80:
     #   < HCI Command: Write Scan.. (0x03|0x001a) plen 1
@@ -349,6 +381,11 @@ module BlueHydra
             # let it time out. (Page Timeout, ACL Connection Already Exists,
             # Command Disallowed, LMP/LL Response Timeout, Connection Timeout...)
             return if (code == "03" || code == "07") && buffer[1] !~ /\sStatus: Success \(0x00\)/
+
+          # elsif, so a surviving HCI event does not pay for this regex - ACL data
+          # lines never start with "> HCI Event:". See ACL_DATA_RE.
+          elsif marker =~ ACL_DATA_RE
+            return
           end
 
         when "<"

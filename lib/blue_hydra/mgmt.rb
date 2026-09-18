@@ -38,6 +38,8 @@ module BlueHydra
     CMD_READ_CONTROLLER_INFO = 0x0004
     CMD_SET_POWERED          = 0x0005
     CMD_SET_BONDABLE         = 0x0009
+    CMD_SET_LE               = 0x000D
+    CMD_SET_BREDR            = 0x002A
     CMD_SET_IO_CAPABILITY    = 0x0018
     CMD_PIN_CODE_NEG_REPLY   = 0x0017
     CMD_USER_CONFIRM_NEG_REPLY = 0x001D
@@ -80,7 +82,58 @@ module BlueHydra
 
     # Start Discovery "address type" bitmask: BR/EDR (bit0) + LE Public (bit1) +
     # LE Random (bit2). 0x07 discovers classic and LE.
-    ADDR_TYPE_ALL = 0x07
+    #
+    # The kernel names the combinations: 0x01 BR/EDR only, 0x06 LE only (public +
+    # random), 0x07 interleaved. Each requested transport must be ENABLED on the
+    # controller or the whole command is rejected - see ensure_transports_enabled.
+    ADDR_TYPE_ALL       = 0x07
+    ADDR_TYPE_BREDR_BIT = 0x01
+    LE_TYPE_BITS        = 0x06
+
+    # Controller settings bits, as returned by Read Controller Information in
+    # supported_settings / current_settings. Only the ones we act on are named as
+    # constants; SETTING_NAMES below carries the rest for logging.
+    SETTING_POWERED = 0x00000001
+    SETTING_BREDR   = 0x00000080
+    SETTING_LE      = 0x00000200
+
+    # Every settings bit the kernel defines (mgmt.h MGMT_SETTING_*, bits 0-25),
+    # so a logged mask is decoded in full.
+    #
+    # Naming all of them is not thoroughness for its own sake: enabling LE on a
+    # DART moved current settings from 0x00000081 to 0x004c0281, because the
+    # kernel brings up the LE-dependent settings with it (CIS central/peripheral
+    # and LL privacy). A partial table printed that as "POWERED BREDR LE" and
+    # silently dropped three set bits, which makes the log look like it decoded
+    # the mask when it did not.
+    SETTING_NAMES = {
+      0x00000001 => "POWERED",
+      0x00000002 => "CONNECTABLE",
+      0x00000004 => "FAST_CONNECTABLE",
+      0x00000008 => "DISCOVERABLE",
+      0x00000010 => "BONDABLE",
+      0x00000020 => "LINK_SECURITY",
+      0x00000040 => "SSP",
+      0x00000080 => "BREDR",
+      0x00000100 => "HS",
+      0x00000200 => "LE",
+      0x00000400 => "ADVERTISING",
+      0x00000800 => "SECURE_CONN",
+      0x00001000 => "DEBUG_KEYS",
+      0x00002000 => "PRIVACY",
+      0x00004000 => "CONFIGURATION",
+      0x00008000 => "STATIC_ADDRESS",
+      0x00010000 => "PHY_CONFIGURATION",
+      0x00020000 => "WIDEBAND_SPEECH",
+      0x00040000 => "CIS_CENTRAL",
+      0x00080000 => "CIS_PERIPHERAL",
+      0x00100000 => "ISO_BROADCASTER",
+      0x00200000 => "ISO_SYNC_RECEIVER",
+      0x00400000 => "LL_PRIVACY",
+      0x00800000 => "PAST_SENDER",
+      0x01000000 => "PAST_RECEIVER",
+      0x02000000 => "SCI"
+    }.freeze
 
     # a subset of mgmt status codes (see mgmt.h).
     STATUS_SUCCESS       = 0x00
@@ -145,6 +198,20 @@ module BlueHydra
     # how long the reader thread blocks in select before re-checking @running
     READER_POLL = 0.5
 
+    # Minimum gap between reader-thread discovery re-arms.
+    #
+    # The kernel stops discovery on its own whenever it needs the radio to
+    # establish a connection - that is the premise the whole connect design rests
+    # on. Re-arming the instant we see Discovering=0 therefore fights the very
+    # connection the kernel is trying to make: it stops discovery again, we re-arm
+    # again, and an on-device capture showed exactly that, Discovering=0 followed
+    # by Start Discovery within a millisecond, over and over.
+    #
+    # Rate limiting it keeps discovery continuous (its purpose) while leaving the
+    # controller room to finish a connection, and bounds the damage however the
+    # suppression state is reached.
+    REARM_MIN_INTERVAL = 2.0
+
     # == Parameters
     #   hci_index :: controller index (the N in hciN), e.g. 0 for hci0
     #   socket    :: optional pre-opened socket, primarily for testing
@@ -164,6 +231,11 @@ module BlueHydra
       @response       = nil
       @running        = false
       @reader_thread  = nil
+      # Set by ensure_transports_enabled to the transports actually enabled on
+      # this controller; nil means "not determined", which falls back to asking
+      # for everything.
+      @enabled_discovery_type  = nil
+      @enabled_transport_names = nil
       @connection_events      = Queue.new
       @discovery_address_type = nil
       # Discovery is the default resting state. This flag, when set, tells the
@@ -178,6 +250,33 @@ module BlueHydra
       @discovering_since = Time.now
       @scan_on_time      = 0.0
       @scan_off_time     = 0.0
+      # Re-arm bookkeeping (see REARM_MIN_INTERVAL). Counters are diagnostic:
+      # rearm_skipped_count climbing means the controller is being asked to stop
+      # discovery far more often than the rate limit allows us to answer, which is
+      # the signature of a connect fighting the scan.
+      @last_rearm_at      = nil
+      @rearm_count        = 0
+      @rearm_skipped_count = 0
+    end
+
+    attr_reader :rearm_count, :rearm_skipped_count
+
+    # True when the controller is currently discovering, per the kernel's own
+    # Discovering events rather than what we last asked for.
+    def discovering?
+      @discovering
+    end
+
+    # How long discovery has been continuously OFF, in seconds, or 0.0 when it is
+    # on. Ground truth from the kernel's Discovering events.
+    #
+    # This is what the discovery-off budget should be measured against. A caller
+    # timing its own phase cannot see time already spent with discovery off by an
+    # earlier phase, and that undercounting is how a 6s budget produced a 35s
+    # window on device.
+    def discovery_off_for
+      return 0.0 if @discovering
+      Time.now - @discovering_since
     end
 
     # Percentage (0-100) of wall-clock time the controller has been discovering
@@ -202,10 +301,138 @@ module BlueHydra
       self.class.parse_address(response[3, 6])
     end
 
+    # [supported_settings, current_settings] from Read Controller Information, or
+    # nil if the command failed.
+    #
+    # Response layout after the 2-byte opcode and 1-byte status: bdaddr(6),
+    # version(1), manufacturer(2), supported_settings(4), current_settings(4).
+    def read_settings
+      response = exec_command(CMD_READ_CONTROLLER_INFO)
+      _command, status = self.class.command_result(response)
+      return nil unless status == STATUS_SUCCESS
+      return nil unless response.bytesize >= 20
+      [response[12, 4].unpack1("V"), response[16, 4].unpack1("V")]
+    end
+
+    # Render a settings bitmask as "0x000000c1 (POWERED BREDR LE)".
+    def self.settings_label(settings)
+      names = SETTING_NAMES.select { |bit, _name| (settings & bit) != 0 }.values
+      format("0x%08x (%s)", settings, names.empty? ? "none" : names.join(" "))
+    end
+
+    # Enable/disable the LE transport (mgmt Set LE). Returns the status byte.
+    def set_le(enable)
+      status_of(exec_command(CMD_SET_LE, [enable ? 0x01 : 0x00].pack("C")))
+    end
+
+    # Enable/disable the BR/EDR transport (mgmt Set BR/EDR). Returns the status
+    # byte. NB the kernel refuses this while LE is disabled, which is why
+    # ensure_transports_enabled does LE first.
+    def set_bredr(enable)
+      status_of(exec_command(CMD_SET_BREDR, [enable ? 0x01 : 0x00].pack("C")))
+    end
+
+    # Turn on every transport the controller supports but currently has disabled,
+    # then settle on a discovery type covering only what is actually enabled.
+    #
+    # Why this exists: Start Discovery's type is checked against the ENABLED
+    # transports, not the supported ones. Asking for interleaved (BR/EDR + LE)
+    # while either is disabled fails the whole command with REJECTED - not a
+    # partial success - so one disabled transport takes down all discovery. A
+    # production DART showed exactly this: supported BREDR+LE, current BREDR only,
+    # and every Start Discovery answered 0x0b REJECTED, which also meant no LE
+    # work of any kind could run there.
+    #
+    # LE is enabled before BR/EDR because the kernel rejects Set BR/EDR while LE
+    # is off (a dual-mode controller is not allowed to be BR/EDR-only through this
+    # interface).
+    #
+    # The two transports do not behave the same way, which was measured on a DART
+    # rather than assumed:
+    #   LE    Set while powered succeeds and the flag takes immediately
+    #         (0x00000081 -> 0x004c0281, the kernel bringing up the LE-dependent
+    #         settings with it).
+    #   BREDR Set while powered answers 0x0b REJECTED in both directions, so it
+    #         needs the radio down - see enable_powered_down.
+    #
+    # Returns the discovery address-type mask to use, and caches it for
+    # start_discovery and the reader thread's re-arm.
+    def ensure_transports_enabled
+      supported, current = read_settings
+      if supported.nil?
+        BlueHydra.logger.error("mgmt: could not read controller settings on #{device}")
+        return @enabled_discovery_type = nil
+      end
+
+      BlueHydra.logger.info("mgmt: #{device} supported settings #{self.class.settings_label(supported)}")
+      BlueHydra.logger.info("mgmt: #{device} current settings   #{self.class.settings_label(current)}")
+
+      attempted = {}
+      attempted[:le] = enable_transport(:le, SETTING_LE, supported, current) { |on| set_le(on) }
+      # BR/EDR is the one that needs the radio down - see enable_powered_down.
+      attempted[:bredr] = enable_transport(:bredr, SETTING_BREDR, supported, current,
+                                          powered_down_retry: true) { |on| set_bredr(on) }
+
+      # Re-read rather than assume: a Set that reported success can still leave the
+      # flag clear, and the whole point is to ask only for what is really enabled.
+      _supported, current = read_settings
+      if current.nil?
+        # A failed re-read is NOT the same as "nothing is enabled". Treating it as
+        # zero would claim both transports are dead on a controller that is in fact
+        # scanning happily: two bogus WARN events, and a CUI reading "NO TRANSPORT
+        # ENABLED" while devices stream in. Stay undetermined instead - discovery
+        # falls back to asking for everything, which is what we did before any of
+        # this existed.
+        BlueHydra.logger.error("mgmt: could not re-read controller settings on #{device}, transports undetermined")
+        return @enabled_discovery_type = nil
+      end
+      BlueHydra.logger.info("mgmt: #{device} settings after transport setup #{self.class.settings_label(current)}")
+
+      @enabled_transport_names = enabled_transport_names(current)
+      @enabled_discovery_type  = discovery_type_for(current)
+      BlueHydra.logger.info(
+        "mgmt: #{device} discovery type 0x%02x (%s)" %
+        [@enabled_discovery_type, @enabled_transport_names.join("+")]
+      )
+
+      # Both transports are expected to work. Report each one that ends up
+      # unusable exactly once, from the re-read rather than from what a Set
+      # claimed, so the warning and its event describe the real end state.
+      #
+      # Last, so that a notification failure cannot cost us the discovery type we
+      # just worked out - the rescue below would otherwise discard it.
+      report_transport(:le, SETTING_LE, supported, current, attempted[:le])
+      report_transport(:bredr, SETTING_BREDR, supported, current, attempted[:bredr])
+
+      @enabled_discovery_type
+    rescue => e
+      # Best effort, like configure_no_pairing: fall back to the previous
+      # behaviour of asking for everything rather than refusing to scan.
+      BlueHydra.logger.error("mgmt: transport setup failed on #{device}: #{e.message}")
+      @enabled_discovery_type = nil
+    end
+
+    # The discovery address-type mask to use: whatever ensure_transports_enabled
+    # settled on, or everything if it never ran or could not tell.
+    def discovery_type
+      @enabled_discovery_type || ADDR_TYPE_ALL
+    end
+
+    # The transports actually enabled, e.g. ["BREDR", "LE"], or nil when
+    # ensure_transports_enabled has not determined them. An EMPTY array is
+    # meaningful and distinct from nil: the controller has neither transport on,
+    # so nothing can be discovered. Read by the CUI to label what it is counting.
+    def enabled_transports
+      @enabled_transport_names
+    end
+
     # Enable device discovery. The reader thread keeps it alive (re-issuing Start
     # Discovery whenever the kernel reports discovery stopped) until
     # stop_discovery is called. Returns the mgmt status byte.
-    def start_discovery(address_type = ADDR_TYPE_ALL)
+    # Defaults to the transports actually enabled on this controller (see
+    # ensure_transports_enabled) rather than unconditionally asking for both.
+    def start_discovery(address_type = nil)
+      address_type ||= discovery_type
       @discovery_address_type = address_type
       @discovery_suppressed   = false
       status_of(exec_command(CMD_START_DISCOVERY, [address_type].pack("C")))
@@ -213,7 +440,10 @@ module BlueHydra
 
     # Disable device discovery (and stop the reader auto-restarting it). Returns
     # the mgmt status byte.
-    def stop_discovery(address_type = ADDR_TYPE_ALL)
+    # The type must match what discovery was STARTED with - the kernel answers
+    # INVALID_PARAMS when it does not - so this defaults to the same derived type.
+    def stop_discovery(address_type = nil)
+      address_type ||= @discovery_address_type || discovery_type
       @discovery_suppressed = true
       status_of(exec_command(CMD_STOP_DISCOVERY, [address_type].pack("C")))
     end
@@ -294,6 +524,31 @@ module BlueHydra
     # event's parameters.
     def self.command_result(params)
       params.b.unpack("S<C") # command opcode (__le16), status (__u8)
+    end
+
+    # True when +address+ is an "identity address" as the kernel defines it, and
+    # therefore usable with Add Device.
+    #
+    # Mirrors hci_is_identity_address (include/net/bluetooth/hci_core.h):
+    #
+    #   if (addr_type == ADDR_LE_DEV_PUBLIC)     return true;
+    #   if ((addr->b[5] & 0xc0) == 0xc0)         return true;   /* random STATIC */
+    #   return false;
+    #
+    # add_device guards on this before touching the connection parameters ("Add
+    # Device allows only identity addresses") and answers INVALID_PARAMS for
+    # anything else. That rejects both resolvable private addresses (top two bits
+    # 01) and non-resolvable ones (top two bits 00) - which is most privacy-
+    # enabled LE hardware, so calling Add Device for them is a guaranteed-failed
+    # round-trip. Those devices need a direct connect instead (BlueHydra::
+    # LeConnect); the kernel's own connect path has no such restriction.
+    #
+    # b[5] is the most significant byte, i.e. the FIRST octet of the printed MAC.
+    def self.identity_address?(address, address_type)
+      return true  if address_type == LE_PUBLIC
+      return false unless address_type == LE_RANDOM
+      msb = address.to_s.split(":").first.to_i(16)
+      (msb & 0xc0) == 0xc0
     end
 
     # Render a 6 byte little-endian BD_ADDR into an uppercase big-endian MAC
@@ -488,6 +743,147 @@ module BlueHydra
       end
     end
 
+    # Enable one transport if the controller supports it but has it switched off.
+    # No-op when unsupported (nothing we can do) or already on.
+    #
+    # powered_down_retry: retry the Set with the radio powered down if it is
+    # refused while powered. Only BR/EDR needs this; see enable_powered_down.
+    #
+    # Returns true if an enable was attempted. Whether it WORKED is not decided
+    # here - report_transport settles that from a fresh read of the settings, so
+    # nothing is reported on the strength of a Set's own status.
+    def enable_transport(name, bit, supported, current, powered_down_retry: false, &setter)
+      return false if (supported & bit).zero?  # unsupported, reported later
+      return false if (current & bit) != 0     # already enabled
+
+      BlueHydra.logger.info("mgmt: #{device} has #{name.to_s.upcase} supported but disabled, enabling")
+      status = setter.call(true)
+      if status == STATUS_SUCCESS
+        BlueHydra.logger.info("mgmt: #{device} #{name.to_s.upcase} enabled")
+        return true
+      end
+
+      retry_powered_down = powered_down_retry && status == STATUS_REJECTED &&
+                           (current & SETTING_POWERED) != 0
+      unless retry_powered_down
+        BlueHydra.logger.warn(
+          "mgmt: #{device} #{name.to_s.upcase} enable refused (status #{self.class.status_label(status)})"
+        )
+        return true
+      end
+
+      BlueHydra.logger.info(
+        "mgmt: #{device} #{name.to_s.upcase} enable refused while powered (status " \
+        "#{self.class.status_label(status)}), retrying with the radio down"
+      )
+      enable_powered_down(name, &setter)
+      true
+    end
+
+    # Report a transport that is not usable. Both BR/EDR and LE are expected to
+    # work, so either one missing is worth a warning and a notification (Pulse
+    # and Stream Builder, each when enabled) rather than only a log line: it
+    # halves what the sensor can see and is invisible in the device data itself.
+    #
+    # Says nothing when the transport is enabled - including the ordinary case of
+    # having enabled it ourselves, which enable_transport already logged at info.
+    def report_transport(name, bit, supported, current, attempted)
+      return if (current & bit) != 0 # usable, nothing to report
+
+      label = name.to_s.upcase
+      if (supported & bit).zero?
+        key     = 'blue_hydra_transport_unsupported'
+        title   = "Blue Hydra #{label} Not Supported"
+        message = "#{device} does not support #{label}, so no #{label} devices can be discovered"
+      else
+        key   = 'blue_hydra_transport_disabled'
+        title = "Blue Hydra #{label} Disabled"
+        message = if attempted
+                    "#{device} has #{label} supported but disabled and it could not be enabled, " \
+                    "so no #{label} devices can be discovered"
+                  else
+                    "#{device} has #{label} disabled and no enable was attempted, " \
+                    "so no #{label} devices can be discovered"
+                  end
+      end
+
+      BlueHydra.logger.warn("mgmt: #{message}")
+      BlueHydra.send_event('blue_hydra',
+        {key: key,
+        title: title,
+        message: message,
+        severity: 'WARN'
+        })
+    end
+
+    # Enable a transport the kernel refuses to change on a live radio.
+    #
+    # Verified on a DART: Set BR/EDR on a powered controller answers 0x0b
+    # REJECTED, both directions. The flag is only writable with the controller
+    # powered down, so that is the only way to bring BR/EDR up on a unit that has
+    # it capable but off. LE has no such restriction - the same DART enabled LE
+    # while powered and the flag took immediately - so this is BR/EDR only rather
+    # than a blanket retry.
+    #
+    # Power-cycling here is in keeping with the rest of the runner: hci_reset
+    # already power-cycles the controller before every discovery round.
+    def enable_powered_down(name)
+      BlueHydra.logger.info("mgmt: #{device} retrying #{name.to_s.upcase} enable with the radio powered down")
+      status = set_powered(false)
+      unless status == STATUS_SUCCESS
+        BlueHydra.logger.error(
+          "mgmt: #{device} could not power down to enable #{name.to_s.upcase} (status #{self.class.status_label(status)})"
+        )
+        return
+      end
+
+      begin
+        status = yield(true)
+        if status == STATUS_SUCCESS
+          BlueHydra.logger.info("mgmt: #{device} #{name.to_s.upcase} enabled with the radio down")
+        else
+          BlueHydra.logger.error(
+            "mgmt: #{device} could not enable #{name.to_s.upcase} powered down either (status #{self.class.status_label(status)})"
+          )
+        end
+      ensure
+        # Always bring the radio back up, whatever the Set did. Leaving it down
+        # would take the unit off the air entirely, which is far worse than the
+        # missing transport we came here to fix.
+        status = set_powered(true)
+        unless status == STATUS_SUCCESS
+          BlueHydra.logger.error(
+            "mgmt: #{device} FAILED to power back up after enabling #{name.to_s.upcase} (status #{self.class.status_label(status)})"
+          )
+        end
+      end
+    end
+
+    # Map enabled transports to a Start Discovery type. The kernel's own naming:
+    # BR/EDR only is 0x01, LE only is 0x06 (public + random), and 0x07 is
+    # interleaved. Asking for a transport that is not enabled is rejected outright,
+    # so only enabled ones go in.
+    def discovery_type_for(current)
+      type = 0
+      type |= ADDR_TYPE_BREDR_BIT if (current & SETTING_BREDR) != 0
+      type |= LE_TYPE_BITS        if (current & SETTING_LE)    != 0
+
+      if type.zero?
+        # Nothing to scan with. Keep asking for everything so the failure is loud
+        # and attributable rather than silently doing nothing.
+        BlueHydra.logger.error("mgmt: #{device} has no usable transport enabled, discovery will fail")
+        return ADDR_TYPE_ALL
+      end
+      type
+    end
+
+    def enabled_transport_names(current)
+      names = []
+      names << "BREDR" if (current & SETTING_BREDR) != 0
+      names << "LE"    if (current & SETTING_LE)    != 0
+      names
+    end
+
     # Fold the elapsed time since the last Discovering transition into the
     # on/off accumulators, then record the new state. Called from the reader
     # thread on every Discovering event.
@@ -510,7 +906,19 @@ module BlueHydra
     # in flight to avoid completion ambiguity (we'll catch the next off event).
     def restart_discovery
       return if @pending_opcode
-      send_command(CMD_START_DISCOVERY, [@discovery_address_type || ADDR_TYPE_ALL].pack("C"))
+
+      # Rate limited so a connect in progress is not fought to a standstill - see
+      # REARM_MIN_INTERVAL. Skipping is safe: the kernel emits Discovering=0 for
+      # every stop, so the next one past the interval re-arms.
+      now = Time.now
+      if @last_rearm_at && (now - @last_rearm_at) < REARM_MIN_INTERVAL
+        @rearm_skipped_count += 1
+        return
+      end
+      @last_rearm_at = now
+      @rearm_count  += 1
+
+      send_command(CMD_START_DISCOVERY, [@discovery_address_type || discovery_type].pack("C"))
     rescue => e
       BlueHydra.logger.error("mgmt: failed to restart discovery: #{e.message}")
     end

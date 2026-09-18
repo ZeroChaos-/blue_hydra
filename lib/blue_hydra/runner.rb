@@ -28,8 +28,10 @@ module BlueHydra
                   :processing_speed,
                   :mgmt,
                   :hci,
+                  :le_connect,
                   :auto_connect_list,
                   :le_pending,
+                  :le_direct_pending,
                   :le_info_scan_queue
 
     # if we have been passed the 'file' option in the config we should try to
@@ -102,6 +104,16 @@ module BlueHydra
         # keyed by address => le_address_type (FIFO, deduped). Requests are held
         # here (never dropped) when the auto-connect list is full.
         self.le_pending = {}
+
+        # LE devices the kernel auto-connect list cannot accept (private
+        # addresses - see BlueHydra::Mgmt.identity_address?), keyed by
+        # address => mgmt address_type. Drained by the direct-connect phase.
+        #
+        # Unlike le_pending these ARE dropped when the list overflows, oldest
+        # first: a private address is only valid until the device rotates it
+        # (typically every 15 minutes), so a stale entry is worthless while a
+        # fresh sighting is not.
+        self.le_direct_pending = {}
 
         # Stunned
         self.stunned = false
@@ -451,11 +463,12 @@ module BlueHydra
       # (item 9) is what regressed version reads (item 19).
       hci_reset
 
+      # Discovery is the whole job: a controller that will not start it produces
+      # no data at all. See retry_start_discovery for when that is retried and
+      # when it kills the process.
       status = mgmt.start_discovery
-      unless status == BlueHydra::Mgmt::STATUS_SUCCESS
-        BlueHydra.logger.error("mgmt start discovery failed (status #{BlueHydra::Mgmt.status_label(status)})")
-        return
-      end
+      status = retry_start_discovery(status) unless status == BlueHydra::Mgmt::STATUS_SUCCESS
+      @discovery_ever_started = true
 
       # Info scan disabled: stay in continuous discovery (the reader thread keeps
       # it alive) - no CONNECT phase, since nothing is enqueued for LE/classic
@@ -470,6 +483,11 @@ module BlueHydra
       # we queued anything, a CONNECT phase to let those devices connect.
       scan_phase(discovery_time)
       connect_phase unless auto_connect_list.empty?
+
+      # Then the devices the kernel list could not take. Deliberately after the
+      # auto-connect phase: those adds are already in the kernel and cost us
+      # nothing to wait on, whereas these are active connects we pay for.
+      le_direct_connect_phase unless le_direct_pending.empty?
     end
 
     # SCAN phase: keep discovery on and feed the auto-connect list. Devices are
@@ -503,6 +521,7 @@ module BlueHydra
     # is cleared so the in-memory view matches the kernel, and discovery resumes
     # on the next cycle's start_discovery (which clears the suppression flag).
     def connect_phase
+      started = Time.now
       drain_connection_events
       disable_scan_before_connect # sets @discovery_suppressed + Stop Discovery
       deadline = Time.now + DISCOVERY_OFF_BUDGET
@@ -513,6 +532,15 @@ module BlueHydra
         sleep 0.1
       end
       clear_auto_connect
+      BlueHydra.logger.debug("connect_phase: took %.2fs" % (Time.now - started))
+    ensure
+      # Leaving discovery off here used to be harmless, because the next cycle
+      # started with hci_reset + start_discovery. It is not harmless once the
+      # direct-connect phase and the classic drain can follow: the off-window just
+      # continues into them, which is how a single window reached 35s on device.
+      # The drain disables scanning per operation anyway, so handing it a
+      # discovering controller costs nothing.
+      resume_discovery_after_connects
     end
 
     # Drain the LE info-scan queue into the auto-connect machinery. Must run only
@@ -553,9 +581,25 @@ module BlueHydra
     # fresh off_since. Otherwise returns off_since unchanged. A single in-flight
     # operation can still overrun the budget (it cannot be interrupted); this
     # bounds the off-time across a backlog of operations.
+    # Hand the radio back to scanning if discovery has been off longer than the
+    # budget, then return a fresh reference point.
+    #
+    # The elapsed time comes from mgmt.discovery_off_for - the kernel's own
+    # Discovering events - not from the caller's clock. A caller that starts
+    # timing at its own entry cannot see time an earlier phase already spent with
+    # discovery off, and that undercounting is how a 6s budget produced a 35s
+    # window on device: connect_phase spent its budget, then the direct-connect
+    # phase started counting from zero.
+    #
+    # +off_since+ is kept for callers that want to thread a reference point
+    # through, but it is only a fallback for when mgmt is unavailable.
     def resume_discovery_if_over_budget(off_since)
-      return off_since if (Time.now - off_since) < DISCOVERY_OFF_BUDGET
-      mgmt.start_discovery
+      off_for = mgmt ? mgmt.discovery_off_for : (Time.now - off_since)
+      return off_since if off_for < DISCOVERY_OFF_BUDGET
+
+      BlueHydra.logger.debug("discovery off for %.2fs (budget %ds), yielding to scanning" %
+                             [off_for, DISCOVERY_OFF_BUDGET])
+      warn_resume_failed("mid-drain", mgmt.start_discovery)
       sleep RESUME_DISCOVERY_WINDOW
       Time.now
     end
@@ -572,8 +616,24 @@ module BlueHydra
     # Small scanning window inserted into a long classic drain when the
     # discovery-off budget is exceeded, so scanning actually happens.
     RESUME_DISCOVERY_WINDOW = 2
+    # Pause before the single Start Discovery retry (see retry_start_discovery).
+    # Long enough that a controller which is merely busy gets a real chance to
+    # become responsive, short enough that a dead one is not left sitting there.
+    START_DISCOVERY_RETRY_DELAY = 8
     # Bounded connect timeout for the native L2CAP reachability probe.
     L2CAP_CONNECT_TIMEOUT = 4
+
+    # How many direct LE connects to run at once (config le_connect_parallel).
+    # These are real radio operations, so this is the knob that trades
+    # discovery-off time against how fast the private-address backlog drains:
+    # one batch costs about one connect timeout regardless of its size, so a
+    # bigger number drains more devices per discovery-off window.
+    LE_DIRECT_CONNECT_PARALLEL = (BlueHydra.config["le_connect_parallel"] || 10).to_i
+
+    # Cap on the direct-connect backlog. Devices rotate private addresses (often
+    # every 15 minutes), so a deep queue is mostly entries that have already gone
+    # stale; past this the oldest are dropped in favour of fresher sightings.
+    LE_DIRECT_PENDING_LIMIT = 256
 
     # hcitool/l2ping connect errors that a controller reset may clear, as
     # opposed to "no route to host" / "host is down" (the device is simply not
@@ -581,16 +641,48 @@ module BlueHydra
     # retry a failed classic connect (item 9, stage B).
     RESET_WORTHY_CONNECT_ERROR = /create connection: (Input\/output|I\/O) error|Command Disallowed/i
 
-    # Request an LE info scan for a device. The request is NEVER dropped: if the
-    # kernel auto-connect list is full (AUTO_CONNECT_LIMIT) the device waits in
-    # le_pending (a FIFO, deduped by address) until a slot frees up. Devices that
-    # are already in the auto-connect list are ignored (already being handled).
+    # Request an LE info scan for a device, routing it to whichever mechanism can
+    # actually reach it.
+    #
+    # Devices with an identity address go to the kernel auto-connect list (mgmt
+    # Add Device), which is opportunistic and effectively free - the kernel
+    # connects whenever the device next advertises. Devices with a private
+    # address CANNOT be added at all (add_device answers INVALID_PARAMS for a
+    # non-identity address), so they go to the direct-connect queue instead.
+    # Checking here rather than discovering it from the mgmt reply saves a
+    # guaranteed-failed round-trip per device per cycle - most LE hardware uses
+    # private addresses, so that was the majority of our Add Device traffic.
+    #
+    # For the auto-connect path the request is NEVER dropped: if the kernel list
+    # is full (AUTO_CONNECT_LIMIT) the device waits in le_pending (a FIFO,
+    # deduped by address) until a slot frees up. Devices already in the
+    # auto-connect list are ignored (already being handled).
     def request_leinfo(address, le_address_type)
+      unless BlueHydra::Mgmt.identity_address?(address, mgmt_le_address_type(le_address_type))
+        request_le_direct_connect(address, le_address_type)
+        return
+      end
+
       return if self.auto_connect_list.key?(address)
       # Hash keeps insertion order (FIFO) and dedupes by address; re-requests
       # just refresh the stored address type without losing queue position.
       self.le_pending[address] = le_address_type
       fill_auto_connect
+    end
+
+    # Queue a private-address LE device for a direct connect. Deduped by address;
+    # a re-sighting refreshes position (delete + re-insert) because a fresher
+    # sighting is more likely to still be at that address. Over LE_DIRECT_PENDING_
+    # LIMIT the oldest entry is dropped - see le_direct_pending.
+    def request_le_direct_connect(address, le_address_type)
+      self.le_direct_pending.delete(address)
+      self.le_direct_pending[address] = mgmt_le_address_type(le_address_type)
+
+      while self.le_direct_pending.size > LE_DIRECT_PENDING_LIMIT
+        stale = self.le_direct_pending.keys.first
+        self.le_direct_pending.delete(stale)
+        BlueHydra::CliUserInterfaceTracker.increment_le_direct_dropped_count
+      end
     end
 
     # Promote as many pending LE devices into the auto-connect list as will fit
@@ -618,6 +710,12 @@ module BlueHydra
         # a mgmt-level add failure is logged and not re-queued (it would be
         # re-requested next info_scan_rate cycle anyway); the pending-queue hold
         # is only for the capacity case, which fill_auto_connect handles.
+        #
+        # INVALID_PARAMS here should now be unreachable: request_leinfo routes
+        # non-identity addresses to the direct-connect path instead of letting
+        # them reach Add Device. If it shows up again, the address classifier and
+        # the kernel have diverged.
+        BlueHydra::CliUserInterfaceTracker.increment_auto_connect_add_failed_count
         BlueHydra.logger.error("mgmt add device failed for #{address} (status #{BlueHydra::Mgmt.status_label(status)})")
       end
     end
@@ -685,6 +783,14 @@ module BlueHydra
           BlueHydra::CliUserInterfaceTracker.increment_auto_connect_connected_count
         when :disconnected
           # queries done for this device -> remove now, beating any timeout
+          #
+          # No counter moves here, which looks like it should leave `added` short
+          # of connected + failed + timeout. It does not: the kernel only
+          # disconnects a link that exists, so a Disconnected is always preceded
+          # by the Connected that already counted it. Checked against a 17 hour
+          # capture - 1073 adds, 930 disconnects of tracked devices, zero of them
+          # for a device that had not connected first, and the three counters
+          # summed to exactly 1073.
           remove_from_auto_connect(address)
         when :failed
           BlueHydra::CliUserInterfaceTracker.increment_auto_connect_failed_count
@@ -702,7 +808,186 @@ module BlueHydra
     # Remove every remaining auto-connect entry (mgmt Remove Device) so the
     # in-memory list matches the kernel state at the end of a CONNECT phase.
     def clear_auto_connect
+      self.auto_connect_list.each do |_address, entry|
+        # Anything still here that never connected got neither a Device Connected
+        # nor a Connect Failed - the kernel simply never saw it advertise inside
+        # the window. Counted so the CUI can account for every add: without this
+        # those devices vanish from the arithmetic entirely.
+        BlueHydra::CliUserInterfaceTracker.increment_auto_connect_timeout_count unless entry[:connected]
+      end
       self.auto_connect_list.keys.each { |address| remove_from_auto_connect(address) }
+    end
+
+    # DIRECT-CONNECT phase: reach the LE devices mgmt Add Device cannot accept
+    # (private addresses) by connecting to them ourselves.
+    #
+    # Runs with discovery suppressed, in batches of LE_DIRECT_CONNECT_PARALLEL.
+    # Between batches it hands the radio back to scanning when the discovery-off
+    # budget is spent, exactly as the classic drain does. resume_discovery_if_
+    # over_budget re-arms discovery (which clears the suppression flag), so every
+    # batch re-disables it first.
+    #
+    # Yielding between batches is not enough on its own, because a single batch
+    # can outlast the budget by itself - so each batch also carries the deadline
+    # and abandons whatever has not answered by it. That is what actually bounds
+    # contiguous discovery-off time here (before the deadline, an on-device run
+    # showed a 36s window against a 6s budget). It is a bound rather than a
+    # routine event: a later 17 hour run abandoned none of 1103 attempts.
+    def le_direct_connect_phase
+      started   = Time.now
+      batches   = 0
+      devices   = 0
+      off_since = Time.now
+
+      until self.le_direct_pending.empty?
+        off_since = resume_discovery_if_over_budget(off_since)
+        disable_scan_before_connect
+
+        # Deadline from how long discovery has ACTUALLY been off, so a batch
+        # inherits whatever the preceding phase already spent rather than getting
+        # a fresh budget of its own.
+        off_for  = mgmt ? mgmt.discovery_off_for : 0.0
+        deadline = Time.now + [DISCOVERY_OFF_BUDGET - off_for, 0.5].max
+
+        batch    = next_le_direct_batch
+        devices += batch.size
+        batches += 1
+        record_le_direct_results(le_connect.connect_batch(batch, deadline))
+      end
+
+      # Instrumentation: the on-device capture showed windows far longer than this
+      # phase should allow, with an 18s stretch of no radio activity that the
+      # aggregate counters could not explain. Logging the phase's own duration
+      # against the real off-time attributes that gap on the next run.
+      BlueHydra.logger.info(
+        "le_direct_connect_phase: %d batches, %d devices, took %.2fs, discovery off %.2fs at exit" %
+        [batches, devices, Time.now - started, mgmt ? mgmt.discovery_off_for : 0.0]
+      )
+    ensure
+      # A phase must never hand back a controller with discovery off. Without
+      # this, the window simply continues into the classic drain, which is part of
+      # how a single window reached 35s on device.
+      resume_discovery_after_connects
+    end
+
+    # Put discovery back on unconditionally. Best effort: this runs in an ensure,
+    # so a failure here must not mask whatever the phase was already raising.
+    def resume_discovery_after_connects
+      return unless mgmt
+      warn_resume_failed("after connect phase", mgmt.start_discovery)
+    rescue => e
+      BlueHydra.logger.error("failed to resume discovery after connect phase: #{e.message}")
+    end
+
+    # A mid-cycle resume that fails only warns. It cannot be the fatal case: the
+    # cycle's own start_discovery already succeeded, so a refusal here is new and
+    # most likely transient (the controller busy servicing a connect). If it is
+    # not transient, the next cycle's start is where it becomes fatal.
+    def warn_resume_failed(context, status)
+      return if status == BlueHydra::Mgmt::STATUS_SUCCESS
+      BlueHydra.logger.warn(
+        "mgmt resume discovery #{context} failed (status #{BlueHydra::Mgmt.status_label(status)})"
+      )
+    end
+
+    # Start Discovery came back unsuccessful. Decide between retrying once and
+    # dying, and return the status discovery actually ended up with.
+    #
+    # The first cycle gets NO retry. Nothing has ever worked at that point, so a
+    # refusal is a standing problem - a disabled transport, the wrong device, a
+    # controller that never came up - and waiting will not change it. That is the
+    # DART case, where the unit ran for hours answering REJECTED to everything.
+    #
+    # Afterwards the controller has demonstrably started discovery at least once,
+    # so a single refusal is treated as transient (busy servicing a connect, or
+    # mid-reset) and retried after a pause. Two in a row is a pattern, not a blip,
+    # and is fatal.
+    def retry_start_discovery(status)
+      discovery_failed_fatal(status) unless @discovery_ever_started
+
+      BlueHydra.logger.warn(
+        "mgmt start discovery failed (status #{BlueHydra::Mgmt.status_label(status)}), " \
+        "retrying once in #{START_DISCOVERY_RETRY_DELAY}s"
+      )
+      sleep START_DISCOVERY_RETRY_DELAY
+
+      status = mgmt.start_discovery
+      discovery_failed_fatal(status, retried: true) unless status == BlueHydra::Mgmt::STATUS_SUCCESS
+
+      BlueHydra.logger.info("mgmt start discovery recovered on retry")
+      status
+    end
+
+    # Start Discovery failed for good, which means this process cannot do its job
+    # at all. Say so at fatal, notify (Pulse and Stream Builder, each when
+    # enabled), and exit non-zero so the supervisor restarts or flags the unit
+    # rather than leaving it running and silently blind.
+    #
+    # exit from this thread does terminate the process - same as the
+    # BluezNotReadyError path in start_discovery_thread.
+    def discovery_failed_fatal(status, retried: false)
+      label   = BlueHydra::Mgmt.status_label(status)
+      context = retried ? "twice in a row" : "on the first discovery cycle"
+      message = "mgmt start discovery failed #{context} on #{BlueHydra.config["bt_device"]} " \
+                "(status #{label}), Blue Hydra cannot discover anything and is exiting"
+
+      BlueHydra.logger.fatal(message)
+      if mgmt && mgmt.enabled_transports
+        BlueHydra.logger.fatal(
+          "mgmt: enabled transports at the time of failure: " \
+          "#{mgmt.enabled_transports.empty? ? 'none' : mgmt.enabled_transports.join('+')}"
+        )
+      end
+      puts message unless BlueHydra.daemon_mode
+
+      BlueHydra.send_event('blue_hydra',
+        {key: 'blue_hydra_start_discovery_failed',
+        title: 'Blue Hydra Could Not Start Discovery',
+        message: message,
+        severity: 'FATAL'
+        })
+      exit 1
+    end
+
+    # Take up to LE_DIRECT_CONNECT_PARALLEL entries off the front of the backlog
+    # (oldest sighting first). Removing them up front means a device that is
+    # still around simply gets re-queued by its next advertisement, rather than
+    # being retried forever from the queue.
+    def next_le_direct_batch
+      batch = {}
+      while batch.size < LE_DIRECT_CONNECT_PARALLEL && !self.le_direct_pending.empty?
+        address        = self.le_direct_pending.keys.first
+        batch[address] = self.le_direct_pending.delete(address)
+      end
+      batch
+    end
+
+    # Fold one batch's outcomes into the counters. A raised link is the win
+    # condition (HciCommand reads the version off it); unreachable, error and
+    # abandoned-at-the-deadline are all just "no version this time". Abandoned is
+    # counted separately because a rising abandoned count means the budget is the
+    # binding constraint, which is a different problem from devices not answering.
+    def record_le_direct_results(results)
+      results.each do |address, outcome|
+        case outcome
+        when :connected
+          BlueHydra::CliUserInterfaceTracker.increment_le_direct_connected_count
+        when :abandoned
+          BlueHydra::CliUserInterfaceTracker.increment_le_direct_abandoned_count
+          BlueHydra.logger.debug("le_connect: #{address} -> abandoned at deadline")
+        when :error
+          # Kept apart from unreachable deliberately. An error is a local socket
+          # problem - we never got to ask the device - whereas unreachable means
+          # we asked and it did not answer. Lumping them together hid a socket
+          # bug for a whole device run: every connect was reported "failed" while
+          # the links were actually coming up fine.
+          BlueHydra::CliUserInterfaceTracker.increment_le_direct_error_count
+          BlueHydra.logger.debug("le_connect: #{address} -> error")
+        else
+          BlueHydra::CliUserInterfaceTracker.increment_le_direct_failed_count
+          BlueHydra.logger.debug("le_connect: #{address} -> #{outcome}")
+        end
+      end
     end
 
     # Stop device discovery/scanning via the mgmt API before an info-scan
@@ -771,6 +1056,22 @@ module BlueHydra
           # Native L2CAP reachability probe (replaces the external l2ping
           # subprocess). Reused for every l2ping-queue entry this thread drains.
           l2ping_probe = BlueHydra::L2Ping.new(mgmt_index, connect_timeout: L2CAP_CONNECT_TIMEOUT)
+
+          # Direct LE connects for private-address devices, which mgmt Add Device
+          # rejects outright. Held on the runner because the DIRECT-CONNECT phase
+          # runs out of run_mgmt_discovery rather than inline here.
+          self.le_connect = BlueHydra::LeConnect.new(
+            mgmt_index, connect_timeout: L2CAP_CONNECT_TIMEOUT
+          )
+
+          # Turn on every transport the controller supports but has switched off,
+          # and settle on a discovery type covering only what ends up enabled.
+          # Start Discovery validates its type against the ENABLED transports, so
+          # a controller with LE supported-but-disabled answers REJECTED to the
+          # interleaved request and no discovery runs at all. Logs the
+          # controller's supported/current settings, which is the first thing to
+          # look at when a device scans nothing. Best effort.
+          mgmt.ensure_transports_enabled
 
           # We only read device info, never bond. Configure the controller
           # non-bondable + NoInputNoOutput once so info/reachability connects
