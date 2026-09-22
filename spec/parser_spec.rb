@@ -174,3 +174,106 @@ describe "BlueHydra::Parser failed remote-version reads" do
     expect(parser.attributes[:address].first).to eq("EC:81:93:14:EC:07")
   end
 end
+
+# Whether an advertiser declared itself connectable decides whether a connect to
+# it could ever succeed. Over a 47 hour run 733 of 1329 attempted addresses had
+# never once advertised as connectable - attempts that could not have worked. See
+# BlueHydra::ConnectTracker and the connect_to_nonconnectable config.
+describe "BlueHydra::Parser advertising connectability" do
+  def parse(lines)
+    chunk  = lines + ["last_seen: #{Time.now.to_i}"]
+    parser = BlueHydra::Parser.new([chunk])
+    parser.parse
+    parser.attributes
+  end
+
+  # the extended form: a Props bitmask with the bits named underneath
+  def extended(props, *flags)
+    ["> HCI Event: LE Meta Event (0x3e) plen 57   #1 2026-09-21 08:52:19.588311\r\n",
+     "      LE Extended Advertising Report (0x0d)\r\n",
+     "        Num reports: 1\r\n",
+     "        Entry 0\r\n",
+     "          Event type: #{props}\r\n",
+     "            Props: #{props}\r\n"] +
+      flags.map { |f| "              #{f}\r\n" } +
+      ["          Address type: Random (0x01)\r\n",
+       "          Address: 7A:BB:CC:DD:EE:FF (Static)\r\n"]
+  end
+
+  context "extended advertising reports (0x0d)" do
+    it "records connectable when the Connectable bit is named" do
+      attrs = parse(extended("0x0013", "Connectable", "Scannable", "Use legacy advertising PDUs"))
+      expect(attrs[:le_connectable]).to eq([true])
+      expect(attrs[:address]).to eq(["7A:BB:CC:DD:EE:FF"])
+    end
+
+    it "records NOT connectable when the bit is absent" do
+      attrs = parse(extended("0x0012", "Scannable", "Use legacy advertising PDUs"))
+      expect(attrs[:le_connectable]).to eq([false])
+    end
+
+    it "records NOT connectable for a bare non-connectable beacon" do
+      attrs = parse(extended("0x0010", "Use legacy advertising PDUs"))
+      expect(attrs[:le_connectable]).to eq([false])
+    end
+
+    # btmon carries the Connectable bit onto the scan response of a connectable
+    # advertiser, so SCAN_RSP needs no special case in the extended form
+    it "records connectable from a scan response that kept the bit" do
+      attrs = parse(extended("0x001b", "Connectable", "Scannable", "Scan response",
+                             "Use legacy advertising PDUs"))
+      expect(attrs[:le_connectable]).to eq([true])
+    end
+  end
+
+  context "legacy advertising reports (0x02), which name the PDU on one line" do
+    def legacy(event_type)
+      ["> HCI Event: LE Meta Event (0x3e) plen 42   #1 2026-09-21 08:52:19.588311\r\n",
+       "      LE Advertising Report (0x02)\r\n",
+       "        Num reports: 1\r\n",
+       "        Event type: #{event_type}\r\n",
+       "        Address type: Random (0x01)\r\n",
+       "        Address: 7A:BB:CC:DD:EE:FF (Static)\r\n"]
+    end
+
+    it "reads ADV_IND as connectable" do
+      expect(parse(legacy("Connectable undirected - ADV_IND (0x00)"))[:le_connectable]).to eq([true])
+    end
+
+    it "reads ADV_DIRECT_IND as connectable" do
+      expect(parse(legacy("Connectable directed - ADV_DIRECT_IND (0x01)"))[:le_connectable]).to eq([true])
+    end
+
+    # "Non connectable" must not match a naive search for "Connectable"
+    it "reads ADV_NONCONN_IND as not connectable" do
+      expect(parse(legacy("Non connectable undirected - ADV_NONCONN_IND (0x03)"))[:le_connectable])
+        .to eq([false])
+    end
+
+    it "reads ADV_SCAN_IND as not connectable" do
+      expect(parse(legacy("Scannable undirected - ADV_SCAN_IND (0x02)"))[:le_connectable]).to eq([false])
+    end
+
+    # a scan response says nothing either way, so it must record nothing rather
+    # than record false
+    it "records nothing for a bare scan response" do
+      expect(parse(legacy("Scan response - SCAN_RSP (0x04)"))[:le_connectable]).to be_nil
+    end
+
+    # the extended form's bitmask arriving ungrouped carries no flags on the line
+    it "records nothing for a bare hex Event type with no flags" do
+      expect(parse(legacy("0x0013"))[:le_connectable]).to be_nil
+    end
+  end
+
+  it "records nothing for a chunk with no advertising report at all" do
+    attrs = parse([
+      "> HCI Event: Read Remote Version Complete (0x0c) plen 8   #1 2026-09-21 08:52:19.588311\r\n",
+      "        Status: Success (0x00)\r\n",
+      "        Handle: 256 Address: 7A:BB:CC:DD:EE:FF (OUI AA-BB-CC)\r\n",
+      "        LMP version: Bluetooth 5.4 (0x0d) - Subversion 1 (0x0001)\r\n"
+    ])
+    expect(attrs[:le_connectable]).to be_nil
+    expect(attrs[:classic_connectable]).to be_nil
+  end
+end

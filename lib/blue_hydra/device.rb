@@ -58,7 +58,22 @@ class BlueHydra::Device
   property :le_tx_power,                   Text
   property :le_features,                   Text
   property :le_features_bitmap,            Text
+  # Distance estimate, derived from le_ibeacon_measured_power and the RSSI we
+  # received. Deliberately NOT synced: it is a pure function of two values that
+  # ARE synced, so anything downstream can derive it - and derive it better, from
+  # the whole le_rssi series rather than one scalar, with a path loss exponent of
+  # its choosing rather than the free-space 2 baked in here. Kept as a column
+  # because the CUI's range field reads it.
   property :ibeacon_range,                 String
+  # An iBeacon's calibrated RSSI at one metre, which is what it broadcasts in
+  # place of a TX power. Kept apart from le_tx_power because it is a different
+  # quantity in different units (dB, not dBm) - conflating the two is what put a
+  # reference RSSI in the TX power column.
+  #
+  # Synced, and cheap to sync: it is a per-beacon calibration constant, so it goes
+  # clean after the first sighting and the change gate never sends it again. It is
+  # the half of the distance calculation the cloud could not otherwise get.
+  property :le_ibeacon_measured_power,     String
 
   property :created_at,                    DateTime
   property :updated_at,                    DateTime
@@ -121,14 +136,14 @@ class BlueHydra::Device
         status:           "online",
         :last_seen.lt  => (Time.now.to_i - (15*60))
       ).each{|device|
-        device.status = 'offline'
+        mark_offline(device)
         device.save
       }
     end
 
     # Kill old things with fire
     BlueHydra::Device.all(:updated_at.lte => Time.at(Time.now.to_i - 604800*2)).each do |dev|
-      dev.status = 'offline'
+      mark_offline(dev)
       dev.sync_to_pulse(true)
       BlueHydra.logger.debug("Destroying #{dev.address} #{dev.uuid}")
       dev.destroy
@@ -140,7 +155,7 @@ class BlueHydra::Device
       status:          "online",
       :last_seen.lt => (Time.now.to_i - (15*60))
     ).each{|device|
-      device.status = 'offline'
+      mark_offline(device)
       device.save
     }
 
@@ -150,9 +165,23 @@ class BlueHydra::Device
       status:          "online",
       :last_seen.lt => (Time.now.to_i - (60*3))
     ).each{|device|
-      device.status = 'offline'
+      mark_offline(device)
       device.save
     }
+  end
+
+  # Mark a device offline and drop the in-memory connect policy we hold for it.
+  #
+  # Strikes must not outlive the sighting that earned them: a device that goes
+  # away and comes back - power cycled, moved, or simply a private address that
+  # has rotated - gets a clean slate rather than inheriting a write-off from
+  # before. This is the only expiry mechanism the strike counter has besides a
+  # successful connect, which is why every offline transition goes through here.
+  #
+  # Deliberately does NOT save; each caller owns its own save/destroy/sync.
+  def self.mark_offline(device)
+    device.status = 'offline'
+    BlueHydra::ConnectTracker.forget(device.address)
   end
 
   # this class method is take a result Hash and convert it into a new or update
@@ -205,7 +234,7 @@ class BlueHydra::Device
       classic_major_class classic_minor_class le_tx_power classic_tx_power
       le_address_type company appearance
       le_random_address_type le_company_uuid le_company_data le_proximity_uuid
-      le_major_num le_minor_num classic_mode le_mode
+      le_major_num le_minor_num classic_mode le_mode le_ibeacon_measured_power
     }.map(&:to_sym).each do |attr|
       if result[attr]
         # we should only get a single value for these so we need to warn if
@@ -217,6 +246,18 @@ class BlueHydra::Device
         end
         record.send("#{attr.to_s}=", result.delete(attr).uniq.sort.first)
       end
+    end
+
+    # The distance estimate, which until now the parser computed (when it computed
+    # it at all) into a result key nothing ever read - it was in neither list
+    # below, so the column stayed NULL and the CUI's range field stayed blank.
+    #
+    # Takes the LAST value rather than the .sort.first the loop above applies,
+    # because these are successive estimates of a moving target: sorting would
+    # pick the smallest number in the batch, i.e. the closest the beacon ever got
+    # rather than where it is now.
+    if result[:ibeacon_range]
+      record.ibeacon_range = result.delete(:ibeacon_range).last
     end
 
     # this is probably a band-aie, likely devices have multiple company type elements
@@ -320,22 +361,51 @@ class BlueHydra::Device
       :le_random_address_type, :le_tx_power, :last_seen, :classic_tx_power,
       :le_features, :classic_features, :le_service_uuids,
       :classic_service_uuids, :classic_channels, :classic_class, :classic_rssi,
-      :le_flags, :le_rssi, :le_company_uuid
+      :le_flags, :le_rssi, :le_company_uuid, :le_ibeacon_measured_power
     ]
   end
 
+  # Attributes stored as JSON, which a sync payload therefore parses back into a
+  # structure instead of shipping the encoded string.
+  #
+  # The two features bitmaps belong here and were missing, so they alone went on
+  # the wire as JSON strings - "{\"0\":\"0x1f\"}" - while their nine siblings went
+  # as parsed structures, leaving a consumer to double-parse exactly those two.
+  # Their setters JSON.generate like all the rest and they sit in the same "update
+  # array attributes" list in update_or_create_from_result; only this list had been
+  # missed.
+  #
+  # They are the only hash-backed members. That matters for EMPTY_SYNC_VALUES,
+  # which has to know about "{}" as well as "[]".
   def is_serialized?(attr)
     [
       :classic_channels,
       :classic_class,
       :classic_features,
+      :classic_features_bitmap,
       :le_features,
+      :le_features_bitmap,
       :le_flags,
       :le_service_uuids,
       :classic_service_uuids,
       :classic_rssi,
       :le_rssi
     ].include?(attr)
+  end
+
+  # Stored values that carry no information and so are left out of a sync payload.
+  #
+  # "[]" and "{}" are the empty forms of the is_serialized? attributes - the
+  # array-backed ones and the two hash-backed features bitmaps. Only "[]" was
+  # listed, so an empty bitmap was sent as the literal string "{}" while an empty
+  # array-backed attribute was correctly omitted.
+  EMPTY_SYNC_VALUES = [nil, "[]", "{}"].freeze
+
+  # Shared by sync_to_pulse and stream_builder_data, which build the same payload
+  # from two copies of this loop. One predicate so the two cannot disagree about
+  # what "empty" means - the bug above was in both.
+  def empty_for_sync?(val)
+    EMPTY_SYNC_VALUES.include?(val)
   end
 
 
@@ -365,6 +435,14 @@ class BlueHydra::Device
       send_data[:data][:status]     = self.status
       send_data[:data][:sync_version] = BlueHydra::SYNC_VERSION
 
+      # The beacon triple is an IDENTITY KEY on the far side: the cloud matches
+      # records on (le_proximity_uuid, le_major_num, le_minor_num), which is why it
+      # goes on every message rather than only when it changes. Same reason address
+      # does.
+      #
+      # It looks like three redundant fields per sync for an immutable value, and
+      # moving it into syncable_attributes would indeed send it once - after which
+      # every later message would be unmatchable. Do not make that optimisation.
       if self.le_proximity_uuid
         send_data[:data][:le_proximity_uuid] = self.le_proximity_uuid
       end
@@ -403,7 +481,7 @@ class BlueHydra::Device
         # ignore nil value attributes
         if @filthy_attributes.include?(attr) || sync_all
           val = self.send(attr)
-          unless [nil, "[]"].include?(val)
+          unless empty_for_sync?(val)
             if is_serialized?(attr)
               send_data[:data][attr] = JSON.parse(val)
             else
@@ -441,6 +519,9 @@ class BlueHydra::Device
     data[:status]       = self.status
     data[:sync_version] = BlueHydra::SYNC_VERSION
 
+    # An identity key on the far side, sent on every message, not change-gated.
+    # See the same block in sync_to_pulse for why moving it into
+    # syncable_attributes would break matching.
     data[:le_proximity_uuid] = self.le_proximity_uuid if self.le_proximity_uuid
     data[:le_major_num]      = self.le_major_num if self.le_major_num
     data[:le_minor_num]      = self.le_minor_num if self.le_minor_num
@@ -459,7 +540,7 @@ class BlueHydra::Device
     syncable_attributes.each do |attr|
       if @filthy_attributes.include?(attr) || sync_all
         val = self.send(attr)
-        unless [nil, "[]"].include?(val)
+        unless empty_for_sync?(val)
           if is_serialized?(attr)
             data[attr] = JSON.parse(val)
           else

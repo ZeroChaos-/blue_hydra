@@ -466,8 +466,12 @@ HELP
           # on-device capture showed as Discovering=0 then Start Discovery 1ms
           # later, repeatedly).
           if runner.mgmt
+            # watchdog climbing means event-driven re-arms are being refused and
+            # lost, and the timer is the only thing putting discovery back on.
             pbuff << "Discovery re-arm: issued: #{runner.mgmt.rearm_count}, " \
                      "rate-limited: #{runner.mgmt.rearm_skipped_count}, " \
+                     "watchdog: #{runner.mgmt.rearm_watchdog_count}, " \
+                     "refused: #{runner.mgmt.rearm_failed_count}, " \
                      "off-for: #{'%.1f' % runner.mgmt.discovery_off_for}s\n"
             lines += 1
           end

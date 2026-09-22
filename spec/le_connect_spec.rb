@@ -76,6 +76,7 @@ describe BlueHydra::LeConnect do
         Errno::ETIMEDOUT::Errno    => :unreachable,
         Errno::EHOSTDOWN::Errno    => :unreachable,
         Errno::ECONNRESET::Errno   => :unreachable,
+        Errno::ENOSYS::Errno       => :unreachable, # HCI 0x3e, see below
         Errno::EPERM::Errno        => :error        # genuinely unclassified
       }.each do |errno, expected|
         allow(sock).to receive(:connect_nonblock).and_raise(wait_writable_error)
@@ -85,6 +86,20 @@ describe BlueHydra::LeConnect do
         expect(connector.connect("7A:BB:CC:DD:EE:FF", BlueHydra::Mgmt::LE_RANDOM))
           .to eq(expected), "errno #{errno} should classify as #{expected}"
       end
+    end
+
+    # ENOSYS reads as "function not implemented" but on a connect it means the
+    # peer never answered. bt_to_errno() has no entry for HCI 0x3e, "Connection
+    # Failed to be Established", so it falls to that function's ENOSYS default -
+    # and 0x3e is the ordinary outcome when a connect goes unanswered. A 47 hour
+    # device run produced 243 of them, all filed as local errors.
+    it "treats ENOSYS as unreachable, not as a local error" do
+      allow(sock).to receive(:connect_nonblock).and_raise(wait_writable_error)
+      allow(connector).to receive(:wait_writable).and_return(true)
+      allow(sock).to receive(:getsockopt).and_return(so_error(Errno::ENOSYS::Errno))
+
+      expect(connector.connect("7A:BB:CC:DD:EE:FF", BlueHydra::Mgmt::LE_RANDOM)).to eq(:unreachable)
+      expect(connector).not_to receive(:hold_link)
     end
 
     # The specific regression: EINVAL from a zapped channel must not be mistaken

@@ -974,5 +974,243 @@ describe "BlueHydra::Mgmt transport enablement" do
       expect(opcodes).to eq([BlueHydra::Mgmt::CMD_START_DISCOVERY])
       expect(@received.first[:params].bytes).to eq([BlueHydra::Mgmt::ADDR_TYPE_ALL])
     end
+
+    # The shutdown reset's Set Powered(off) produces this exact event. Answering it
+    # restarts discovery on a controller we are shutting down - observed on device
+    # 17ms after the power-off, then again from the watchdog 2s later.
+    it "the reader thread does not re-arm once we are shutting down" do
+      allow(mgmt).to receive(:send_command)
+      mgmt.stopping!
+      mgmt.send(:dispatch_event, BlueHydra::Mgmt::EV_DISCOVERING,
+                [BlueHydra::Mgmt::ADDR_TYPE_ALL, 0].pack("CC"))
+
+      expect(mgmt).not_to have_received(:send_command)
+    end
+
+    # the Discovering transition itself must still be recorded, so the
+    # scanning-uptime accounting does not end the run mid-window
+    it "still tracks the discovery transition while shutting down" do
+      allow(mgmt).to receive(:send_command)
+      mgmt.instance_variable_set(:@discovering, true)
+      mgmt.stopping!
+      mgmt.send(:dispatch_event, BlueHydra::Mgmt::EV_DISCOVERING,
+                [BlueHydra::Mgmt::ADDR_TYPE_ALL, 0].pack("CC"))
+
+      expect(mgmt.instance_variable_get(:@discovering)).to eq(false)
+    end
+  end
+end
+
+# restart_discovery is fire-and-forget, so a refused Start Discovery is dropped
+# silently - and because re-arming is driven by the Discovering=0 event, which has
+# already been and gone, nothing retries. Measured on a 47 hour run: 530
+# discovery-off windows over 20s, 384 of them opening right after a re-arm
+# attempt. The watchdog re-arms on a timer so a lost attempt is recoverable.
+describe "BlueHydra::Mgmt discovery re-arm watchdog" do
+  let(:sock) { instance_double("Socket") }
+  let(:mgmt) { BlueHydra::Mgmt.new(0, socket: sock) }
+
+  before do
+    allow(sock).to receive(:closed?).and_return(false)
+    allow(sock).to receive(:send)
+    allow(BlueHydra.logger).to receive(:debug)
+  end
+
+  # discovery started, then the kernel stopped it +ago+ seconds back and the
+  # re-arm that followed was lost
+  def discovery_stopped(ago, suppressed: false, last_rearm_ago: nil)
+    mgmt.instance_variable_set(:@discovery_address_type, BlueHydra::Mgmt::ADDR_TYPE_ALL)
+    mgmt.instance_variable_set(:@discovery_suppressed, suppressed)
+    mgmt.instance_variable_set(:@discovering, false)
+    mgmt.instance_variable_set(:@discovering_since, Time.now - ago)
+    mgmt.instance_variable_set(:@last_rearm_at, last_rearm_ago && (Time.now - last_rearm_ago))
+  end
+
+  def watchdog
+    mgmt.send(:rearm_watchdog)
+  end
+
+  it "re-arms when discovery has been off past the interval with no stop pending" do
+    discovery_stopped(5)
+    watchdog
+    expect(mgmt.rearm_watchdog_count).to eq(1)
+    expect(mgmt.rearm_count).to eq(1)
+  end
+
+  it "does not fire during a deliberate connect window" do
+    discovery_stopped(30, suppressed: true)
+    watchdog
+    expect(mgmt.rearm_watchdog_count).to eq(0)
+    expect(mgmt.rearm_count).to eq(0)
+  end
+
+  # The shutdown reset powers the controller down, which looks exactly like an
+  # unexpected stop. Left uninformed, the watchdog spends the shutdown starting
+  # discovery on a controller we are turning off.
+  it "does not fire once we are shutting down" do
+    discovery_stopped(30)
+    mgmt.stopping!
+    watchdog
+    expect(mgmt.rearm_watchdog_count).to eq(0)
+    expect(mgmt.rearm_count).to eq(0)
+    expect(sock).not_to have_received(:send)
+  end
+
+  # nothing resumes after a stop, so the flag must not be clearable by the usual
+  # route that clears @discovery_suppressed
+  it "stays stopped even after a start_discovery clears the suppression flag" do
+    discovery_stopped(30)
+    mgmt.stopping!
+    mgmt.instance_variable_set(:@discovery_suppressed, false)
+    watchdog
+    expect(mgmt.rearm_count).to eq(0)
+  end
+
+  it "does nothing while discovery is actually running" do
+    discovery_stopped(30)
+    mgmt.instance_variable_set(:@discovering, true)
+    watchdog
+    expect(mgmt.rearm_watchdog_count).to eq(0)
+  end
+
+  # nothing to restore before the first start_discovery, and firing there would
+  # ask a controller that may not even be powered
+  it "does nothing before discovery has ever been started" do
+    discovery_stopped(30)
+    mgmt.instance_variable_set(:@discovery_address_type, nil)
+    watchdog
+    expect(mgmt.rearm_watchdog_count).to eq(0)
+  end
+
+  it "leaves a brief off window alone" do
+    discovery_stopped(BlueHydra::Mgmt::REARM_MIN_INTERVAL - 0.5)
+    watchdog
+    expect(mgmt.rearm_watchdog_count).to eq(0)
+  end
+
+  # it must not burn rate-limited calls: rearm_skipped_count signals a connect
+  # fighting the scan and would stop meaning that if the watchdog inflated it
+  it "waits out the rate limit instead of spending skips" do
+    discovery_stopped(30, last_rearm_ago: 0.1)
+    10.times { watchdog }
+    expect(mgmt.rearm_watchdog_count).to eq(0)
+    expect(mgmt.rearm_skipped_count).to eq(0)
+  end
+
+  it "fires again once the rate limit has passed" do
+    discovery_stopped(30, last_rearm_ago: BlueHydra::Mgmt::REARM_MIN_INTERVAL + 0.1)
+    watchdog
+    expect(mgmt.rearm_watchdog_count).to eq(1)
+  end
+
+  # the regression this exists for, end to end: a lost re-arm no longer means
+  # discovery stays off until the next cycle
+  it "recovers discovery after a re-arm that was silently refused" do
+    # kernel says discovery stopped; the event-driven re-arm goes out and is lost
+    mgmt.instance_variable_set(:@discovery_address_type, BlueHydra::Mgmt::ADDR_TYPE_ALL)
+    mgmt.send(:dispatch_event, BlueHydra::Mgmt::EV_DISCOVERING,
+              [BlueHydra::Mgmt::ADDR_TYPE_ALL, 0].pack("CC"))
+    expect(mgmt.rearm_count).to eq(1)
+
+    # no further Discovering event ever arrives, so without the watchdog nothing
+    # would try again
+    mgmt.instance_variable_set(:@discovering_since, Time.now - 30)
+    mgmt.instance_variable_set(:@last_rearm_at,
+                              Time.now - (BlueHydra::Mgmt::REARM_MIN_INTERVAL + 0.1))
+    watchdog
+
+    expect(mgmt.rearm_watchdog_count).to eq(1)
+    expect(mgmt.rearm_count).to eq(2)
+  end
+end
+
+# restart_discovery cannot await its own reply - the reader thread is what
+# delivers replies, so blocking there would deadlock. The completion therefore
+# arrived with no pending command and was dropped, which is why a refused re-arm
+# was invisible. Now it is reported.
+describe "BlueHydra::Mgmt re-arm completion reporting" do
+  let(:mgmt) { BlueHydra::Mgmt.new(0, socket: instance_double("Socket")) }
+
+  before { allow(BlueHydra.logger).to receive(:debug) }
+
+  # a Command Complete for +opcode+ with +status+, as the kernel sends it
+  def completion(opcode, status)
+    BlueHydra::Mgmt.encode_packet(
+      BlueHydra::Mgmt::EV_CMD_COMPLETE, 0, [opcode, status].pack("S<C")
+    )
+  end
+
+  def deliver(opcode, status)
+    mgmt.send(:handle_packet, completion(opcode, status))
+  end
+
+  it "logs the decoded status of an accepted re-arm" do
+    deliver(BlueHydra::Mgmt::CMD_START_DISCOVERY, BlueHydra::Mgmt::STATUS_SUCCESS)
+
+    expect(mgmt.rearm_ok_count).to eq(1)
+    expect(mgmt.rearm_failed_count).to eq(0)
+    expect(BlueHydra.logger).to have_received(:debug)
+      .with(/discovery re-arm returned 0x00 \(SUCCESS\)/)
+  end
+
+  it "logs and counts a refused re-arm" do
+    deliver(BlueHydra::Mgmt::CMD_START_DISCOVERY, BlueHydra::Mgmt::STATUS_REJECTED)
+
+    expect(mgmt.rearm_failed_count).to eq(1)
+    expect(mgmt.rearm_ok_count).to eq(0)
+    expect(BlueHydra.logger).to have_received(:debug)
+      .with(/discovery re-arm returned 0x0b \(REJECTED\).*refused 1/)
+  end
+
+  # BUSY is not a refusal. It says discovery was already running when this re-arm
+  # landed, so the re-arm was redundant - which is the opposite of the condition
+  # the refused tally is there to surface.
+  it "counts a BUSY re-arm as accepted, since discovery was already on" do
+    deliver(BlueHydra::Mgmt::CMD_START_DISCOVERY, BlueHydra::Mgmt::STATUS_BUSY)
+
+    expect(mgmt.rearm_ok_count).to eq(1)
+    expect(mgmt.rearm_failed_count).to eq(0)
+    expect(BlueHydra.logger).to have_received(:debug)
+      .with(/discovery re-arm returned 0x0a \(BUSY\).*accepted 1, refused 0/)
+  end
+
+  it "carries a running tally so the log line stands alone" do
+    deliver(BlueHydra::Mgmt::CMD_START_DISCOVERY, BlueHydra::Mgmt::STATUS_SUCCESS)
+    deliver(BlueHydra::Mgmt::CMD_START_DISCOVERY, BlueHydra::Mgmt::STATUS_REJECTED)
+    deliver(BlueHydra::Mgmt::CMD_START_DISCOVERY, BlueHydra::Mgmt::STATUS_BUSY)
+
+    expect(mgmt.rearm_ok_count).to eq(2)
+    expect(mgmt.rearm_failed_count).to eq(1)
+    expect(BlueHydra.logger).to have_received(:debug).with(/accepted 2, refused 1/)
+  end
+
+  # a completion someone IS waiting for must go to that caller untouched, not be
+  # mistaken for an unawaited re-arm
+  it "does not report a completion a caller is waiting for" do
+    mgmt.instance_variable_set(:@pending_opcode, BlueHydra::Mgmt::CMD_START_DISCOVERY)
+    deliver(BlueHydra::Mgmt::CMD_START_DISCOVERY, BlueHydra::Mgmt::STATUS_SUCCESS)
+
+    expect(mgmt.rearm_ok_count).to eq(0)
+    expect(mgmt.rearm_failed_count).to eq(0)
+    expect(mgmt.instance_variable_get(:@response)).not_to be_nil
+  end
+
+  # other commands are never fired and forgotten, so an unawaited one of those is
+  # a late reply to a timed-out call and stays silent
+  it "stays quiet about unawaited completions for other commands" do
+    deliver(BlueHydra::Mgmt::CMD_STOP_DISCOVERY, BlueHydra::Mgmt::STATUS_BUSY)
+    deliver(BlueHydra::Mgmt::CMD_ADD_DEVICE, BlueHydra::Mgmt::STATUS_REJECTED)
+
+    expect(mgmt.rearm_ok_count).to eq(0)
+    expect(mgmt.rearm_failed_count).to eq(0)
+    expect(BlueHydra.logger).not_to have_received(:debug).with(/re-arm returned/)
+  end
+
+  it "still dispatches non-completion events normally" do
+    mgmt.send(:handle_packet, BlueHydra::Mgmt.encode_packet(
+      BlueHydra::Mgmt::EV_DEVICE_CONNECTED, 0,
+      BlueHydra::Mgmt.pack_address("AA:BB:CC:DD:EE:FF") + ("\x00" * 9).b
+    ))
+    expect(mgmt.connection_events.pop).to eq(type: :connected, address: "AA:BB:CC:DD:EE:FF")
   end
 end

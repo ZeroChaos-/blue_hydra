@@ -81,9 +81,40 @@ module BlueHydra
     CONNECTED_ERRORS = [Errno::ECONNREFUSED, Errno::EISCONN].freeze
 
     # Errors that mean the device never answered.
+    #
+    # ENOSYS is in here for a non-obvious reason. bt_to_errno() (net/bluetooth/
+    # lib.c) translates the HCI status onto an errno and returns ENOSYS for any
+    # code it has no entry for - and it has no entry for 0x3e, "Connection Failed
+    # to be Established", which is THE ordinary LE outcome when we send a connect
+    # and the peer never answers. So ENOSYS on a connect reads as "function not
+    # implemented" while actually meaning "unreachable". A 47 hour device run
+    # produced 243 of them, every one filed as a local error until this entry, and
+    # 0x3e was the most common status in the matching capture at 2368 occurrences.
+    #
+    # Be clear that this is a BLANKET mapping, not one scoped to 0x3e, and that it
+    # cannot be scoped here: bt_to_errno collapses every code it does not know
+    # onto the same ENOSYS before we ever see it, so getsockopt(SO_ERROR) hands
+    # back 38 with the original status already discarded.
+    #
+    # That makes it deliberately lossy. Most unmapped codes really are "asked, no
+    # answer" (0x22 LL Response Timeout, 0x3f MAC Connection Failed), but a few
+    # are not: 0x3a Controller Busy and 0x44 Operation Cancelled by Host are local
+    # conditions that belong in error, and 0x2f Insufficient Security, 0x3b
+    # Unacceptable Connection Parameters and 0x3d MIC Failure all mean the device
+    # DID answer. Calling those unreachable is wrong in principle and accepted
+    # here because every one of these outcomes is handled identically downstream -
+    # no version read this time - and because 0x3e dominates by orders of
+    # magnitude.
+    #
+    # If that ever needs to be exact, the status does survive somewhere: the mgmt
+    # Connect Failed event carries it as a byte after the address, which
+    # Mgmt#dispatch_event currently drops on the floor (it keeps params[0,6] and
+    # nothing else). Surfacing it and matching it to the in-flight connect by
+    # address would give the real code instead of this approximation.
     UNREACHABLE_ERRORS = [
       Errno::EHOSTDOWN, Errno::EHOSTUNREACH, Errno::ETIMEDOUT,
-      Errno::ECONNABORTED, Errno::ENETUNREACH, Errno::ECONNRESET
+      Errno::ECONNABORTED, Errno::ENETUNREACH, Errno::ECONNRESET,
+      Errno::ENOSYS
     ].freeze
 
     # == Parameters

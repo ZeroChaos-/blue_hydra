@@ -189,8 +189,41 @@ module BlueHydra
       STATUS_RFKILLED
     ].freeze
 
-    # how long to wait for a command's completion event
-    DEFAULT_TIMEOUT = 5
+    # Start Discovery outcomes that mean discovery is NOT stopped - i.e. the thing
+    # the caller asked for is already true.
+    #
+    # BUSY belongs here. start_discovery_internal (net/bluetooth/mgmt.c) answers
+    # BUSY in exactly three situations: discovery.state != DISCOVERY_STOPPED, a
+    # periodic inquiry is running, or discovery is paused. A powered-down
+    # controller answers NOT_POWERED instead, and a transport we cannot scan on
+    # answers NOT_SUPPORTED. So BUSY is the kernel saying "already discovering",
+    # never "refused to discover" - it is the one status that PROVES the radio is
+    # doing what we wanted.
+    #
+    # This matters because we also re-arm discovery from the reader thread. A
+    # re-arm that lands in the window between a cycle's hci_reset and that cycle's
+    # own start_discovery leaves the cycle asking for something already running,
+    # and treating that as failure killed an otherwise healthy process - see
+    # retry_start_discovery.
+    #
+    # The sub-cases where discovery is momentarily not on (a Stop still in flight,
+    # a suspend-time pause) need no special handling: reaching DISCOVERY_STOPPED
+    # emits Discovering=0, which re-arms, and rearm_watchdog covers a lost one.
+    DISCOVERY_ON_STATUSES = [
+      STATUS_SUCCESS,
+      STATUS_BUSY
+    ].freeze
+
+    # Does this Start Discovery status mean discovery is running? See
+    # DISCOVERY_ON_STATUSES for why BUSY counts.
+    def self.discovery_on?(status)
+      DISCOVERY_ON_STATUSES.include?(status)
+    end
+
+    # How long to wait for a command's completion event. Raised from 5s: a busy
+    # controller answers more slowly, and a 47 hour run produced four commands that
+    # timed out here, one of which took down a discovery cycle for 20s.
+    DEFAULT_TIMEOUT = 6
 
     # how long to allow bin/rfkill-reset to run during recovery
     RFKILL_RESET_TIMEOUT = 45
@@ -242,6 +275,13 @@ module BlueHydra
       # reader thread NOT to re-arm discovery (a deliberate connect window);
       # start_discovery clears it, stop_discovery sets it.
       @discovery_suppressed   = false
+      # Shutdown intent, set once by #stopping! and never cleared - unlike
+      # @discovery_suppressed, which start_discovery clears. The reader thread
+      # outlives the decision to stop (it has to, so the shutdown reset's own
+      # command replies get delivered), so without this it answers the power-off's
+      # Discovering=0 by starting discovery again on a controller we are in the
+      # middle of shutting down.
+      @stopping               = false
       # Scanning-uptime tracking: the fraction of wall-clock time the controller
       # is actually discovering (vs stopped for a connect/info window). Driven by
       # the kernel Discovering events (ground truth), accumulated in the reader
@@ -257,9 +297,17 @@ module BlueHydra
       @last_rearm_at      = nil
       @rearm_count        = 0
       @rearm_skipped_count = 0
+      # re-arms the watchdog had to issue because no Discovering event did it -
+      # see rearm_watchdog. Climbing means re-arms are being refused and lost.
+      @rearm_watchdog_count = 0
+      # what the kernel said about our fire-and-forget re-arms, which used to be
+      # discarded unread - see record_unawaited_completion
+      @rearm_ok_count     = 0
+      @rearm_failed_count = 0
     end
 
-    attr_reader :rearm_count, :rearm_skipped_count
+    attr_reader :rearm_count, :rearm_skipped_count, :rearm_watchdog_count,
+                :rearm_ok_count, :rearm_failed_count
 
     # True when the controller is currently discovering, per the kernel's own
     # Discovering events rather than what we last asked for.
@@ -493,6 +541,22 @@ module BlueHydra
       BlueHydra.logger.error("mgmt: configure_no_pairing failed: #{e.message}")
     end
 
+    # Declare that we are shutting down: stop re-arming discovery.
+    #
+    # Called before the shutdown reset, not by #close, because the gap between the
+    # two is the whole problem. #close cannot carry this - the reader thread must
+    # still be alive through the shutdown reset to deliver its command replies, so
+    # by the time #close runs the unwanted re-arms have already happened. Observed
+    # on device: a Set Powered(off) during Runner#stop, answered 17ms later with
+    # "kernel stopped discovery, restarting to keep scanning continuous", then a
+    # watchdog re-arm 2s after that.
+    #
+    # One-way on purpose. There is no resume, and a flag that could be cleared
+    # would eventually be cleared by start_discovery.
+    def stopping!
+      @stopping = true
+    end
+
     # Stop the reader thread and close the control socket.
     def close
       @running = false
@@ -660,38 +724,126 @@ module BlueHydra
         sock = @sock
         break unless sock
         begin
-          next unless IO.select([sock], nil, nil, READER_POLL)
-          data = sock.recv(4096)
+          ready = IO.select([sock], nil, nil, READER_POLL)
+          data  = ready ? sock.recv(4096) : nil
         rescue IOError, SystemCallError
           # socket was closed/reopened under us - pick up the new one next pass
           sleep 0.05
           next
         end
-        next if data.nil? || data.empty?
+
+        if data && !data.empty?
+          begin
+            handle_packet(data)
+          rescue => e
+            BlueHydra.logger.error("mgmt reader: #{e.message}")
+          end
+        end
+
+        # Deliberately OUTSIDE the "did we get data" branch, and reached on a bare
+        # select timeout too: the whole point is to act when nothing is arriving.
         begin
-          handle_packet(data)
+          rearm_watchdog
         rescue => e
-          BlueHydra.logger.error("mgmt reader: #{e.message}")
+          BlueHydra.logger.error("mgmt reader watchdog: #{e.message}")
         end
       end
+    end
+
+    # Safety net for a discovery re-arm that was lost.
+    #
+    # restart_discovery is fire-and-forget: its Command Complete arrives with no
+    # pending command registered and is dropped, so a refused Start Discovery
+    # vanishes silently. That would still recover if anything retried - but
+    # re-arming is driven by the Discovering=0 EVENT, and discovery is already off
+    # by then, so no further event arrives and nothing tries again. Discovery stays
+    # off until the next cycle issues its own Start Discovery.
+    #
+    # Measured on a 47 hour run: 530 discovery-off windows ran over 20s, and 384 of
+    # them opened immediately after a re-arm attempt, clustering at 20-30s against
+    # a 30s discovery_time. REARM_MIN_INTERVAL did not cause that, but it did
+    # expose it - before the rate limit the re-arm thrash fired many times a
+    # second, which accidentally retried the lost attempts. Trading the thrash for
+    # one attempt per stop traded it for silent outages.
+    #
+    # So re-arm on a timer as well as on the event. This covers every way discovery
+    # can end up off when it should be on, not just a refused command.
+    def rearm_watchdog
+      return unless rearm_discovery?           # shutting down, or a connect window
+      return if @discovering                   # already scanning
+      return if @discovery_address_type.nil?   # never started, nothing to restore
+      return if discovery_off_for < REARM_MIN_INTERVAL
+
+      # Gate on the same interval restart_discovery enforces, so the watchdog never
+      # burns a rate-limited call. Without this it would fire every READER_POLL and
+      # inflate rearm_skipped_count, which exists to signal a connect fighting the
+      # scan and would stop meaning that.
+      return if @last_rearm_at && (Time.now - @last_rearm_at) < REARM_MIN_INTERVAL
+
+      @rearm_watchdog_count += 1
+      BlueHydra.logger.debug(
+        "mgmt: discovery off %.1fs with no stop pending, re-arming (watchdog)" % discovery_off_for
+      )
+      restart_discovery
     end
 
     # Route one packet: command replies go to a waiting caller, everything else
     # is an unsolicited kernel event.
     def handle_packet(data)
       event, _index, params = self.class.decode_packet(data)
-      if event == EV_CMD_COMPLETE || event == EV_CMD_STATUS
-        cmd_opcode, _status = self.class.command_result(params)
-        @resp_mutex.synchronize do
-          if @pending_opcode && cmd_opcode == @pending_opcode
-            @response = params
-            @resp_cv.signal
-          end
-          # else: unsolicited/late completion (e.g. our own discovery restart) - drop
-        end
-      else
+      unless event == EV_CMD_COMPLETE || event == EV_CMD_STATUS
         dispatch_event(event, params)
+        return
       end
+
+      cmd_opcode, status = self.class.command_result(params)
+      delivered = false
+      @resp_mutex.synchronize do
+        if @pending_opcode && cmd_opcode == @pending_opcode
+          @response = params
+          @resp_cv.signal
+          delivered = true
+        end
+      end
+      return if delivered
+
+      # Nobody was waiting for this one. Report it instead of dropping it: the
+      # only command we deliberately fire and forget is the discovery re-arm, so
+      # this is the single place the kernel ever tells us whether a re-arm was
+      # accepted. Logged outside the mutex - nothing that blocks belongs in there.
+      record_unawaited_completion(cmd_opcode, status)
+    end
+
+    # Status of a completion no caller was waiting for.
+    #
+    # restart_discovery cannot wait for its own reply: the reader thread is what
+    # delivers replies, so blocking here would deadlock. The consequence was that
+    # a refused re-arm was invisible - the reason a lost re-arm could leave
+    # discovery off for tens of seconds with nothing in the log to say why (see
+    # rearm_watchdog). Every re-arm outcome is now logged with its decoded status
+    # and a running tally, so "what is the re-arm actually returning" is a grep
+    # rather than an inference.
+    #
+    # Scoped to Start Discovery because that is the only fire-and-forget command;
+    # anything else arriving unawaited is a late reply to a timed-out call and is
+    # still dropped silently.
+    def record_unawaited_completion(cmd_opcode, status)
+      return unless cmd_opcode == CMD_START_DISCOVERY
+
+      # BUSY counts as accepted, not refused: it means discovery was already on,
+      # so this re-arm was merely redundant. The refused tally exists to say "the
+      # watchdog is the only thing keeping discovery alive", and filing a BUSY
+      # there would raise that alarm for the one answer that rules it out.
+      if self.class.discovery_on?(status)
+        @rearm_ok_count += 1
+      else
+        @rearm_failed_count += 1
+      end
+
+      BlueHydra.logger.debug(
+        "mgmt: discovery re-arm returned #{self.class.status_label(status)} " \
+        "(accepted #{@rearm_ok_count}, refused #{@rearm_failed_count})"
+      )
     end
 
     # React to unsolicited kernel events: keep discovery alive (unless
@@ -703,7 +855,7 @@ module BlueHydra
       when EV_DISCOVERING
         _addr_type, discovering = params.b.unpack("CC")
         record_discovering_transition(discovering == 1)
-        if discovering == 0 && !@discovery_suppressed
+        if discovering == 0 && rearm_discovery?
           BlueHydra.logger.debug("mgmt: kernel stopped discovery, restarting to keep scanning continuous")
           restart_discovery
         end
@@ -904,7 +1056,26 @@ module BlueHydra
     # normal command path. The resulting completion comes back to this loop with
     # no pending command registered and is dropped. Skipped while a command is
     # in flight to avoid completion ambiguity (we'll catch the next off event).
+    # Should the reader thread put discovery back when it finds it off?
+    #
+    # Both re-arm paths ask this one question - the Discovering=0 event and
+    # rearm_watchdog - so a new reason not to re-arm cannot be taught to one and
+    # missed by the other. That is how the watchdog shipped without knowing about
+    # shutdown while the event path did not know either.
+    #
+    # Asked BEFORE the callers log or count anything, so the debug line and the
+    # watchdog tally describe re-arms that were actually attempted.
+    def rearm_discovery?
+      return false if @stopping               # shutting down; leave the radio alone
+      return false if @discovery_suppressed   # a deliberate connect window
+      true
+    end
+
     def restart_discovery
+      # Also checked here, at the single point that actually sends, so a future
+      # caller that forgets the predicate above still cannot re-arm during
+      # shutdown.
+      return if @stopping
       return if @pending_opcode
 
       # Rate limited so a connect in progress is not fought to a standstill - see

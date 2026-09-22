@@ -211,15 +211,44 @@ Open items
 --------------------------------------------------------------------------------
 9. Success-gate info/leinfo scan timing (don't rate-limit before a success)
 --------------------------------------------------------------------------------
-- Problem: push_to_queue rate-limits re-scans using query_history[mode], stamped
-  when a scan is ENQUEUED (an attempt), not when it SUCCEEDS. A device we have
-  never successfully scanned still waits the full info_scan_rate (default 600s)
-  between attempts even though we have no data for it.
-- Desired: do NOT block a new scan by info_scan_rate before that device's first
-  SUCCESS; keep retrying (subject to a minimum floor). Start the info_scan_rate
-  backoff only AFTER a success (gate on last-SUCCESS, not last-attempt). Keep a
-  minimum-interval floor but reduce it from 45s to 15s (named constant; update
-  the validation floor in blue_hydra.rb, currently 45).
+- THE GOAL, stated plainly: a device that simply FAILED its connect attempt must
+  not then wait the entire info-scan timeout before we try again. info_scan_rate
+  is the cadence for re-scanning a device we already have data for. It was never
+  meant to be the penalty for one failed connect, and using it as both is the bug.
+- Why it matters, measured over a 47 hour run: the gap between consecutive
+  failures of the same address was min 571s, median 617s - precisely
+  info_scan_rate (600s). Every retry in that run paid the full success cadence.
+  Worse, the LE path is dominated by private addresses that rotate (RPA default
+  ~15 min), so a 600s wait routinely lands after the address we wanted has
+  changed: the "retry" never reached the device at all. Three attempts spaced
+  600s apart also meant ~30 minutes to establish that a device was hopeless.
+- Problem, mechanically: push_to_queue rate-limits re-scans using
+  query_history[mode], stamped when a scan is ENQUEUED (an attempt), not when it
+  SUCCEEDS. So an attempt that failed is indistinguishable from one that worked.
+- PARTIALLY LANDED. The specific case above is fixed: ConnectTracker::
+  FAILED_RETRY_INTERVAL (15s) replaces info_scan_rate in push_to_queue while a
+  device is mid-strike-streak (ConnectTracker.retry_soon? - at least one failure,
+  not yet struck out). Three strikes now resolve in ~30s instead of ~30 minutes,
+  and a retry lands while a private address is still likely valid. Scoped to :le,
+  because every strike comes from an LE connect and the tracker is keyed on the
+  full address, so without the mode check a dual-mode device's LE failures would
+  shorten its classic cadence too - which an LE failure is no evidence for.
+  This is only safe because STRIKE_LIMIT bounds it; a short interval with no
+  ceiling would spin forever on a device that never answers.
+  NB that `mode == :le` check is a stopgap. The intended shape is per-mode
+  strikes on their own backoff timer, which removes the special case and gives
+  classic the same treatment - see item 13, which now carries that design.
+- STILL OPEN, the broader item: gate on last-SUCCESS rather than last-attempt.
+  What landed keys off "did the last connect fail", which is not the same as "have
+  we ever got data from this device". A device that connects fine but never yields
+  a version still looks like a success and still waits the full 600s. Also still
+  open: reduce the minimum-interval floor from 45s to 15s (named constant; update
+  the validation floor in blue_hydra.rb, currently 45) so the config cannot be set
+  below what the failure path now uses.
+- Sequencing note: the floor change and the failure backoff stop interacting at
+  all once item 13's separate per-mode failure timer lands, because the failure
+  path will no longer share query_history or info_scan_rate. Do item 13's timer
+  first and this item shrinks to just the last-SUCCESS gating.
 - Design: define "success" per mode (leinfo -> lmp_version/features populated;
   classic info -> name/features/version). Known in the RESULT thread when
   parsing; record last-success there in the in-memory query_history (no DB off
@@ -227,6 +256,22 @@ Open items
   last_attempt >= MIN_INFO_SCAN_INTERVAL) OR (now - last_success >=
   info_scan_rate). Interacts with the event-driven flow: a connected-but-no-
   version case should count as not-yet-success and retry sooner.
+- BOUNDED BY THE STRIKE RULE, deliberately. ConnectTracker stops attempting an
+  address after STRIKE_LIMIT (3) consecutive failures; the streak resets on a
+  successful connect and the entry is dropped when the device is marked offline.
+  The retry loop this item asks for is therefore capped at 3 attempts while a
+  device stays continuously online. That cap is the price of the fast retry above
+  - the two were designed together and should not be separated without thought:
+    * a device that goes offline and returns starts clean, so intermittent
+      devices are unaffected. The case to verify on-device is a device that stays
+      ONLINE continuously and never connects: 3 quick attempts, then nothing
+      until it times out of online status.
+    * if that proves too tight, the options are (a) never-succeeded devices get a
+      larger ceiling than devices we already have data for, or (b) the strike
+      counter decays with time rather than only on success/offline. Measure
+      first - the run that motivated the rule had exactly ONE address of 1329
+      that would have hit the ceiling while online, so the ceiling is close to
+      free today, and the fast retry made reaching it cheap rather than costly.
 
 --------------------------------------------------------------------------------
 10. Lighter kernel auto-connect list clear (mgmt Remove-all + startup clear)
@@ -294,3 +339,193 @@ Open items
   on each reconnect (that is what rescues flaky devices whose read races the
   disconnect). Consider folding info scan / l2ping / version read into one shared
   per-device scan cadence (with item 9).
+- BlueHydra::ConnectTracker is now the obvious home for that shared per-device
+  state: it already holds an in-memory, mutex-guarded, address-keyed entry
+  written by the result thread and read by the discovery thread, which is exactly
+  the thread boundary this item describes as the hard part. Adding a
+  last-version-read stamp (and item 9's last-success stamp) to that entry avoids
+  inventing a third registry, and it inherits the forget-on-offline behaviour for
+  free. Note it is deliberately NOT persisted; if any of this state needs to
+  survive a restart, that is a separate decision.
+
+--------------------------------------------------------------------------------
+13. Finish the connect-attempt gating (connectability + strikes)
+--------------------------------------------------------------------------------
+- Landed: a connect_to_nonconnectable config (default false) that skips devices
+  which have advertised themselves non-connectable and never advertised
+  otherwise, plus an unconditional 3-consecutive-failure strike rule. Both live
+  in BlueHydra::ConnectTracker, in memory only, consulted from request_leinfo so
+  they cover the kernel auto-connect path and the direct-connect path together.
+  Strikes come from direct-connect unreachable/error, auto-connect Connect
+  Failed, and auto-connect timeouts; they clear on any successful connect and are
+  dropped when Device.mark_offline runs. Measured basis: over a 47 hour run, 733
+  of 1329 attempted addresses had never advertised connectable (~27% of attempts
+  wasted), and one address burned 107 attempts for zero successes.
+- Remaining, and the biggest piece: MODE-SPECIFIC STRIKES WITH THEIR OWN BACKOFF.
+  Both LE and classic should keep strikes, independently per mode, on a backoff
+  timer that is not info_scan_rate. Two changes, and they belong together:
+  * Key strikes on (address, MODE), not on address alone. Today ConnectTracker
+    keys on address and every strike comes from an LE connect, which is exactly
+    why push_to_queue has to special-case `mode == :le` before applying the fast
+    retry - without that guard a dual-mode device's LE failures would suppress and
+    re-cadence its classic scans, which an LE failure is no evidence for. Keying
+    per mode deletes that special case and lets the two paths hold independent
+    streaks for the same device: a phone that refuses LE connects but answers a
+    classic page (or the reverse) gets written off on one transport only. Expect
+    per-mode STRIKE_LIMIT too - a classic page is slower and more expensive than
+    an LE connect, so the ceilings and intervals probably should not match.
+  * Give the failure path its own timer, separate from info_scan_rate. Today
+    FAILED_RETRY_INTERVAL is consulted INSIDE push_to_queue's info_scan_rate gate
+    and shares its query_history stamp, so "how often do we refresh a device we
+    already have data for" and "how long do we wait after a failed connect" are
+    entangled in one number written in one place. They are different things and
+    should be measured separately: hold a per-(address, mode) last_failure_at in
+    ConnectTracker and back off on its own schedule, ideally progressive across
+    the strikes (e.g. 15s / 30s / 60s) rather than one flat interval, so a
+    genuinely flaky device gets a fair third attempt without a hopeless one being
+    retried hard. Once that exists the failure path neither reads nor writes
+    query_history, and info_scan_rate goes back to meaning only what its name says.
+  * Classic's failure signal has to come from somewhere first. The classic info
+    scan reports a subprocess stderr string (hcitool info) rather than an mgmt
+    event, so the cleanest sequencing is after item 4 replaces it with our own
+    HCI reads and classic failures become mgmt/HCI statuses like the LE paths.
+    In the meantime two usable signals already exist: RESET_WORTHY_CONNECT_ERROR
+    / the stderr matching in scan_with_reset_retry, and BlueHydra::L2Ping's
+    outcome, which is already a clean reachable/unreachable. Either could seed
+    classic strikes before item 4 lands.
+  * Connectability does NOT generalise: classic devices do not advertise, so there
+    is no equivalent signal and the connect_to_nonconnectable gate stays LE-only.
+    Only the strike half of this item is cross-mode.
+  * :abandoned deliberately does not strike (budget ran out, no evidence about
+    the device). Revisit if abandoned counts ever climb - a device that is always
+    abandoned is never actually evaluated, which is its own bug.
+  * No CUI visibility. ConnectTracker counts nonconnectable_skipped and
+    struck_out_skipped and logs each skip at debug, but nothing is on the debug
+    CUI line next to the auto-connect / direct-LE counters. Add it when the next
+    on-device run needs to show the gates are working without grepping a log.
+  * The "advertised both ways" case is treated as connectable on purpose, so a
+    dual-mode advertiser that never connects is caught by strikes rather than by
+    the connectability gate. If a real device turns out to advertise connectable
+    and non-connectable in alternation while genuinely refusing connections, the
+    stricter "ever sent non-connectable" rule is the fallback - it will suppress
+    more, including some devices that would have answered.
+  * Unbounded-growth check: the tracker holds one small entry per address seen,
+    dropped on offline. Private addresses rotate, so the set churns; confirm on a
+    long run that tracked_count tracks the online device count rather than
+    climbing forever.
+
+--------------------------------------------------------------------------------
+14. Parsed-value fidelity: malformed proximity UUID, and numbers stored as text
+--------------------------------------------------------------------------------
+- All found while splitting the four things btmon labels "TX power:" apart. That
+  fix landed, and so did the proximity UUID grouping below; what is left changes a
+  stored format and needs deciding rather than doing.
+- LANDED: le_proximity_uuid was misgrouped, one missing dash. The old pattern
+  scan(/(.{8})(.{4})(.{4})(.*)/) had FOUR capture groups where a UUID has five, so
+  the trailing 16 hex characters came out as one blob:
+    wire bytes:  74278bdab64445208f0c720eaf059935
+    was:         74278bda-b644-4520-8f0c720eaf059935   (8-4-4-16)
+    now:         74278bda-b644-4520-8f0c-720eaf059935  (8-4-4-4-12)
+  It affected 64 of 64 iBeacon chunks in a 9 minute capture, i.e. every sighting.
+  The byte reversal around it is CORRECT and verified byte for byte against a raw
+  payload - bluez prints this UUID reversed from the wire (print_manufacturer_apple
+  reads it back to front with get_le32/get_le16 per group) - so do not "fix" that
+  part. Parser#proximity_uuid now also returns nil rather than a partial string,
+  because an empty UUID is an identity key two unrelated beacons could collide on.
+- Consequences of that change, accepted deliberately rather than migrated:
+  * Existing rows keep the old shape until each beacon is seen again.
+    Device.update_or_create_from_result matches on
+    (le_proximity_uuid, le_major_num, le_minor_num) when an address has rotated,
+    so a beacon already in the DB is seen as a new device once, then settles.
+  * Worth knowing where this value goes, since it is not obvious from
+    syncable_attributes: le_proximity_uuid is not in that list, but the list is only
+    the change-gated tier. sync_to_pulse and stream_builder_data send the beacon
+    triple unconditionally whenever it is set, outside that loop, because the cloud
+    matches records on it (item 15). So this is a key on the far side, not a display
+    string - worth remembering if its format is ever touched again.
+  * No migration needed for the regrouping itself. The cloud store was empty when
+    this landed, so there were no records keyed on the old shape, and locally
+    update_or_create_from_result tries address BEFORE the triple - a static-address
+    beacon is found by address and has its le_proximity_uuid updated in place, same
+    record, same sync_id. Only a rotating-address beacon already in the local DB
+    gets a second record, once.
+  * SETTLED: le_ibeacon_measured_power is synced, ibeacon_range is not.
+    The measured power is a per-beacon calibration constant, so it goes clean after
+    the first sighting and the change gate never resends it - and it is the half of
+    the distance calculation nothing downstream can get another way. The range is a
+    pure function of it and the RSSI, both on the wire, so sending it would ship a
+    derived value and freeze the free-space path loss exponent (2) that this
+    calculates with, which we already know reads long indoors. Anything downstream
+    can derive distance from the whole le_rssi series with an exponent of its
+    choosing. The column stays for the CUI's range field.
+  * While reading that: syncable_attributes is a misleading name. It is the
+    change-gated subset, not "everything we sync". Three attributes go every time
+    (uuid as sync_id, status, address), three more go whenever set
+    (le_proximity_uuid, le_major_num, le_minor_num), and le_company_data/company
+    go unconditionally when both are set DESPITE also being in the list. Only six
+    properties are genuinely never sent: id, uap_lap, created_at, updated_at,
+    ibeacon_range, le_ibeacon_measured_power. Renaming it, or folding the
+    always-send tier into one declared structure, would stop the next reader
+    concluding what this one did - that absence from the list means absence from
+    the wire.
+- Numeric attributes are stored as display strings, so duplicates resolve by
+  LEXICAL sort. le_tx_power holds "3 dBm"; the normal-attribute loop in
+  Device.update_or_create_from_result picks result[attr].uniq.sort.first, which
+  ranked "127 dBm" above "3 dBm" because "1" < "3". Dropping the 127 sentinel
+  removed the case that mattered, but the ordering is still wrong for any device
+  that legitimately reports two different powers, and the same applies to
+  classic_tx_power and le_ibeacon_measured_power.
+  * Minimum fix: sort these numerically (to_i) rather than lexically.
+  * Better: store the integer dBm and render the unit at the display/sync edge.
+    That is a schema and sync-format change, hence its own item. ibeacon_range is
+    already the odd one out - a Float from the parser into a String column, which
+    is why it needed explicit last-value handling instead of the shared loop.
+- Related and unresolved: ibeacon_range uses free-space path loss (exponent 2).
+  Indoors the exponent is nearer 2-4, so the estimate reads long - 14-71m for
+  RSSI -73..-85 against a -59 dB reference in the capture above. Now that the
+  estimate is actually produced and persisted, it is worth deciding whether that
+  formula is good enough to show in the CUI's range column or needs a calibrated
+  exponent.
+
+--------------------------------------------------------------------------------
+15. Sync payload: the two features bitmaps are shaped wrong on the wire
+--------------------------------------------------------------------------------
+- Both found by inspecting a real payload from Device#stream_builder_data rather
+  than by reading, and both now FIXED. Kept here because each changed the shape on
+  the wire, which was an accepted decision rather than a silent one.
+- LANDED: le_features_bitmap and classic_features_bitmap were sent as JSON STRINGS
+  while their nine siblings were sent as parsed structures:
+    le_features         wire type Array    ["LE Encryption"]
+    le_flags            wire type Array    ["LE General Discoverable Mode"]
+    le_rssi             wire type Array    [{"t"=>1,"rssi"=>"-50 dBm"}]
+    le_features_bitmap  wire type String   "{\"0\":\"0x1f\"}"   <- was
+    classic_features_bitmap  wire type String   "{\"0\":\"0xff\"}"   <- was
+  sync_to_pulse and stream_builder_data branch on is_serialized?, and these two
+  were missing from that list even though their setters JSON.generate like the rest
+  and they sit in the same "update array attributes" list in
+  update_or_create_from_result. A consumer had to double-parse exactly these two of
+  the eleven. They are in the list now, so both arrive as objects.
+- LANDED: the empty-value skip guard missed them for the same reason. It read
+  `unless [nil, "[]"].include?(val)`, which assumes array-backed storage; these two
+  are hash-backed and serialize to "{}" when empty:
+    le_features         empty -> stored "[]"  -> omitted from payload   (correct)
+    le_features_bitmap  empty -> stored "{}"  -> SENT as the string "{}"
+  Now EMPTY_SYNC_VALUES, consulted through empty_for_sync? by both payload
+  builders, so the two copies of that loop cannot disagree about what empty means -
+  this bug was in both of them.
+- SETTLED, will not do: created_at stays local. The cloud keeps data forever while
+  the local DB is cleared periodically, so its own first-sighting record is both
+  more complete than ours and the one that matters; sending ours would only
+  contradict it after a local wipe.
+- SETTLED, leave as is: le_proximity_uuid, le_major_num and le_minor_num are sent
+  on EVERY sync rather than change-gated, from the always-send block in both sync
+  methods. That is three redundant fields per message for an immutable triple, and
+  it is correct - the cloud matches records on that triple (intended design), so it
+  is an identity key and has to be present on every message, exactly like address.
+  Moving it into syncable_attributes would send it once and then stop, and every
+  later message would be unmatchable. Do not "optimise" this.
+  * Related: this is why item 14's regrouping of le_proximity_uuid is a change to a
+    key rather than to a display string. It needed no migration because the cloud
+    store was empty when it landed, but the next change to that format will not get
+    that for free.
+

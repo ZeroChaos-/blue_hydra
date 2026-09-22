@@ -66,6 +66,21 @@ module BlueHydra
       @io_mutex      = Mutex.new
       @running       = false
       @reader_thread = nil
+      # Shutdown intent; see #stopping!.
+      @stopping      = false
+    end
+
+    # Declare that we are shutting down: stop issuing version reads.
+    #
+    # Same reasoning as BlueHydra::Mgmt#stopping!. This reader thread issues a
+    # Read Remote Version of its own accord on every LE Connection Complete, and
+    # it stays alive until #close, which Runner#stop calls after the shutdown
+    # reset. Connections can still complete in that window - the kernel
+    # auto-connect list is populated right up to the power-off - so without this
+    # we send a command to a controller we are powering down, and log a version
+    # read for a device we will not record.
+    def stopping!
+      @stopping = true
     end
 
     # Launch the dedicated reader thread. The socket itself is opened (and
@@ -127,6 +142,7 @@ module BlueHydra
     # React to one received packet: if it announces a new LE connection, fire a
     # version read for its handle. Never raises out to the reader loop.
     def handle_packet(data)
+      return if @stopping
       handle = self.class.le_connection_handle(data)
       return unless handle
       BlueHydra.logger.debug("hci: LE connection handle 0x%04x up, reading remote version" % handle)

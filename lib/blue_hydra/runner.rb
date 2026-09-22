@@ -316,6 +316,16 @@ module BlueHydra
       return if @stopping
       @stopping = true
       BlueHydra.logger.info("Runner stopped. Exiting after clearing queue...")
+
+      # Tell the two components that act on their own initiative before anything
+      # else happens, because both outlive this decision. Their reader threads run
+      # until the closes further down, and both react to kernel events by ISSUING
+      # commands - Mgmt re-arms discovery when it sees discovery stop, HciCommand
+      # reads a remote version when it sees a connection complete. The shutdown
+      # reset below generates exactly those events, so left uninformed they spend
+      # the shutdown undoing it.
+      self.mgmt.stopping! if self.mgmt
+      self.hci.stopping!  if self.hci
       if self.btmon_thread
         self.btmon_thread.kill # stop this first thread so data stops flowing ...
         # ...then wait for it to actually finish unwinding. Its ensure closes
@@ -326,8 +336,18 @@ module BlueHydra
         self.btmon_thread.join(5)
       end
       unless BlueHydra.config["file"] #then stop doing anything if we are doing anything
-        self.discovery_thread.kill if self.discovery_thread
-        self.ubertooth_thread.kill if self.ubertooth_thread
+        # Kill both, then WAIT for them to unwind, for the same reason the btmon
+        # thread is joined above. These two are the ones that run external
+        # commands - hcitool info, ubertooth-rx/-scan - and Command.execute3's
+        # ensure is what stops those children, signalling and reaping them with a
+        # short bound. Thread#kill only schedules the unwind, so without a join
+        # here the reset and the queue drain below race that cleanup, and process
+        # teardown can win: the child then outlives us still holding the
+        # controller or the USB radio. Bounded so a wedged thread cannot hang
+        # shutdown, and sized above execute3's own TERM+KILL budget so a child
+        # that needs escalating still gets it.
+        [self.discovery_thread, self.ubertooth_thread].compact.each(&:kill)
+        [self.discovery_thread, self.ubertooth_thread].compact.each { |t| t.join(5) }
         if self.mgmt
           # Clear anything we left in the kernel (auto-connect list, open
           # connections) with a final reset before closing the control socket.
@@ -467,7 +487,8 @@ module BlueHydra
       # no data at all. See retry_start_discovery for when that is retried and
       # when it kills the process.
       status = mgmt.start_discovery
-      status = retry_start_discovery(status) unless status == BlueHydra::Mgmt::STATUS_SUCCESS
+      status = retry_start_discovery(status) unless BlueHydra::Mgmt.discovery_on?(status)
+      note_discovery_already_on(status)
       @discovery_ever_started = true
 
       # Info scan disabled: stay in continuous discovery (the reader thread keeps
@@ -608,17 +629,32 @@ module BlueHydra
     AUTO_CONNECT_LIMIT = 32
 
     # Single bound (seconds) on how long discovery may be continuously off - the
-    # CONNECT phase and the classic drain. Sized above the observed worst-case
-    # single operation (LE connect ~5.5s). Sole time-based safety net.
-    DISCOVERY_OFF_BUDGET = 6
+    # CONNECT phase and the classic drain. Sole time-based safety net.
+    #
+    # Must stay ABOVE the worst-case single bounded operation, or one operation can
+    # spend the whole budget and the bound stops meaning anything. Those are the
+    # observed LE connect (~5.5s) and Mgmt::DEFAULT_TIMEOUT, which is why raising
+    # that timeout to 6s raised this to 7s with it.
+    DISCOVERY_OFF_BUDGET = 7
     # Max devices we admit into a single CONNECT phase (<= AUTO_CONNECT_LIMIT).
     CONNECT_PENDING_LIMIT = AUTO_CONNECT_LIMIT
     # Small scanning window inserted into a long classic drain when the
     # discovery-off budget is exceeded, so scanning actually happens.
     RESUME_DISCOVERY_WINDOW = 2
-    # Pause before the single Start Discovery retry (see retry_start_discovery).
-    # Long enough that a controller which is merely busy gets a real chance to
-    # become responsive, short enough that a dead one is not left sitting there.
+    # Total Start Discovery attempts on a cycle after the first, before giving up.
+    #
+    # Two, i.e. one retry. Little reaches this: BUSY means discovery is already
+    # running (Mgmt::DISCOVERY_ON_STATUSES) and NOT_POWERED is handled by rfkill
+    # recovery inside exec_command, leaving the genuinely ambiguous middle - FAILED,
+    # NO_RESOURCES - where one second look is worth having. Raising the count does
+    # not buy tolerance, it only delays the verdict; the BUSY crash that looked
+    # like it wanted more attempts wanted the status read correctly instead.
+    START_DISCOVERY_ATTEMPTS = 2
+
+    # Pause before that retry (see retry_start_discovery). Long enough that a
+    # controller which is merely slow gets a real chance to become responsive,
+    # short enough that a dead one is not left sitting there. Stays inside the
+    # 6-10s window this retry was specified for.
     START_DISCOVERY_RETRY_DELAY = 8
     # Bounded connect timeout for the native L2CAP reachability probe.
     L2CAP_CONNECT_TIMEOUT = 4
@@ -658,6 +694,11 @@ module BlueHydra
     # deduped by address) until a slot frees up. Devices already in the
     # auto-connect list are ignored (already being handled).
     def request_leinfo(address, le_address_type)
+      # Single gate for BOTH LE paths (kernel auto-connect and direct connect):
+      # skip a device that advertises itself as non-connectable, and skip one that
+      # has failed STRIKE_LIMIT connects in a row. See BlueHydra::ConnectTracker.
+      return unless BlueHydra::ConnectTracker.attempt?(address)
+
       unless BlueHydra::Mgmt.identity_address?(address, mgmt_le_address_type(le_address_type))
         request_le_direct_connect(address, le_address_type)
         return
@@ -781,6 +822,7 @@ module BlueHydra
         when :connected
           entry[:connected] = true
           BlueHydra::CliUserInterfaceTracker.increment_auto_connect_connected_count
+          BlueHydra::ConnectTracker.success(address)
         when :disconnected
           # queries done for this device -> remove now, beating any timeout
           #
@@ -794,6 +836,7 @@ module BlueHydra
           remove_from_auto_connect(address)
         when :failed
           BlueHydra::CliUserInterfaceTracker.increment_auto_connect_failed_count
+          BlueHydra::ConnectTracker.strike(address)
           remove_from_auto_connect(address)
         end
       end
@@ -808,12 +851,18 @@ module BlueHydra
     # Remove every remaining auto-connect entry (mgmt Remove Device) so the
     # in-memory list matches the kernel state at the end of a CONNECT phase.
     def clear_auto_connect
-      self.auto_connect_list.each do |_address, entry|
+      self.auto_connect_list.each do |address, entry|
         # Anything still here that never connected got neither a Device Connected
         # nor a Connect Failed - the kernel simply never saw it advertise inside
         # the window. Counted so the CUI can account for every add: without this
         # those devices vanish from the arithmetic entirely.
-        BlueHydra::CliUserInterfaceTracker.increment_auto_connect_timeout_count unless entry[:connected]
+        #
+        # Also a strike: we asked the kernel to connect it and nothing came back,
+        # which is the same "no answer" the direct path counts as unreachable.
+        unless entry[:connected]
+          BlueHydra::CliUserInterfaceTracker.increment_auto_connect_timeout_count
+          BlueHydra::ConnectTracker.strike(address)
+        end
       end
       self.auto_connect_list.keys.each { |address| remove_from_auto_connect(address) }
     end
@@ -884,14 +933,27 @@ module BlueHydra
     # most likely transient (the controller busy servicing a connect). If it is
     # not transient, the next cycle's start is where it becomes fatal.
     def warn_resume_failed(context, status)
-      return if status == BlueHydra::Mgmt::STATUS_SUCCESS
+      return if BlueHydra::Mgmt.discovery_on?(status)
       BlueHydra.logger.warn(
         "mgmt resume discovery #{context} failed (status #{BlueHydra::Mgmt.status_label(status)})"
       )
     end
 
-    # Start Discovery came back unsuccessful. Decide between retrying once and
-    # dying, and return the status discovery actually ended up with.
+    # Note the one non-SUCCESS Start Discovery status that is still a success.
+    #
+    # Worth a line rather than silence: it says a reader-thread re-arm turned
+    # discovery on before this cycle's own request got there, which is the only
+    # way discovery ends up running without the caller having started it.
+    def note_discovery_already_on(status)
+      return unless status == BlueHydra::Mgmt::STATUS_BUSY
+      BlueHydra.logger.debug(
+        "mgmt: start discovery answered #{BlueHydra::Mgmt.status_label(status)}, " \
+        "discovery was already running (a re-arm got there first)"
+      )
+    end
+
+    # Start Discovery came back unsuccessful. Decide between retrying and dying,
+    # and return the status discovery actually ended up with.
     #
     # The first cycle gets NO retry. Nothing has ever worked at that point, so a
     # refusal is a standing problem - a disabled transport, the wrong device, a
@@ -899,23 +961,38 @@ module BlueHydra
     # DART case, where the unit ran for hours answering REJECTED to everything.
     #
     # Afterwards the controller has demonstrably started discovery at least once,
-    # so a single refusal is treated as transient (busy servicing a connect, or
-    # mid-reset) and retried after a pause. Two in a row is a pattern, not a blip,
-    # and is fatal.
+    # so a refusal is treated as transient and retried after a pause. Only when
+    # every one of START_DISCOVERY_ATTEMPTS is refused is it taken as a standing
+    # problem rather than a blip.
+    #
+    # A BUSY answer never gets here, and the retry loop is why that matters. BUSY
+    # means discovery is ALREADY RUNNING, so no amount of retrying can clear it -
+    # each pause just gives the reader thread longer to keep discovery alive, and
+    # the next attempt is refused for the same reason. It killed a 48 hour run at
+    # two attempts, then a nine minute run at three, both times while Device Found
+    # events were still arriving: more attempts only moved the deadline.
+    # Mgmt.discovery_on? settles it at the door instead.
     def retry_start_discovery(status)
-      discovery_failed_fatal(status) unless @discovery_ever_started
+      discovery_failed_fatal(status, attempts: 1) unless @discovery_ever_started
 
-      BlueHydra.logger.warn(
-        "mgmt start discovery failed (status #{BlueHydra::Mgmt.status_label(status)}), " \
-        "retrying once in #{START_DISCOVERY_RETRY_DELAY}s"
-      )
-      sleep START_DISCOVERY_RETRY_DELAY
+      attempts = 1
+      while attempts < START_DISCOVERY_ATTEMPTS
+        BlueHydra.logger.warn(
+          "mgmt start discovery failed (status #{BlueHydra::Mgmt.status_label(status)}) " \
+          "on attempt #{attempts} of #{START_DISCOVERY_ATTEMPTS}, " \
+          "retrying in #{START_DISCOVERY_RETRY_DELAY}s"
+        )
+        sleep START_DISCOVERY_RETRY_DELAY
 
-      status = mgmt.start_discovery
-      discovery_failed_fatal(status, retried: true) unless status == BlueHydra::Mgmt::STATUS_SUCCESS
+        attempts += 1
+        status = mgmt.start_discovery
+        if BlueHydra::Mgmt.discovery_on?(status)
+          BlueHydra.logger.info("mgmt start discovery recovered on attempt #{attempts}")
+          return status
+        end
+      end
 
-      BlueHydra.logger.info("mgmt start discovery recovered on retry")
-      status
+      discovery_failed_fatal(status, attempts: attempts)
     end
 
     # Start Discovery failed for good, which means this process cannot do its job
@@ -925,9 +1002,10 @@ module BlueHydra
     #
     # exit from this thread does terminate the process - same as the
     # BluezNotReadyError path in start_discovery_thread.
-    def discovery_failed_fatal(status, retried: false)
+    def discovery_failed_fatal(status, attempts: 1)
       label   = BlueHydra::Mgmt.status_label(status)
-      context = retried ? "twice in a row" : "on the first discovery cycle"
+      # attempts == 1 is only reachable on the first cycle, which gets no retries
+      context = attempts > 1 ? "#{attempts} times in a row" : "on the first discovery cycle"
       message = "mgmt start discovery failed #{context} on #{BlueHydra.config["bt_device"]} " \
                 "(status #{label}), Blue Hydra cannot discover anything and is exiting"
 
@@ -972,8 +1050,12 @@ module BlueHydra
         case outcome
         when :connected
           BlueHydra::CliUserInterfaceTracker.increment_le_direct_connected_count
+          BlueHydra::ConnectTracker.success(address)
         when :abandoned
           BlueHydra::CliUserInterfaceTracker.increment_le_direct_abandoned_count
+          # deliberately NOT a strike: we ran out of budget and stopped waiting,
+          # which is no evidence about the device. Striking here would write off
+          # devices for being unlucky about batch ordering.
           BlueHydra.logger.debug("le_connect: #{address} -> abandoned at deadline")
         when :error
           # Kept apart from unreachable deliberately. An error is a local socket
@@ -982,9 +1064,11 @@ module BlueHydra
           # bug for a whole device run: every connect was reported "failed" while
           # the links were actually coming up fine.
           BlueHydra::CliUserInterfaceTracker.increment_le_direct_error_count
+          BlueHydra::ConnectTracker.strike(address)
           BlueHydra.logger.debug("le_connect: #{address} -> error")
         else
           BlueHydra::CliUserInterfaceTracker.increment_le_direct_failed_count
+          BlueHydra::ConnectTracker.strike(address)
           BlueHydra.logger.debug("le_connect: #{address} -> #{outcome}")
         end
       end
@@ -1374,11 +1458,32 @@ module BlueHydra
       # no minutes conversion.
       self.query_history[track_addr] ||= {}
       last_info = self.query_history[track_addr][mode].to_i
-      if BlueHydra.info_scan && (BlueHydra.config["info_scan_rate"].to_i > 0)
-        if (Time.now.to_i - BlueHydra.config["info_scan_rate"].to_i) >= last_info
-          queue.push({command: command, address: address, le_address_type: le_address_type})
-          self.query_history[track_addr][mode] = Time.now.to_i
-        end
+      return unless BlueHydra.info_scan && BlueHydra.config["info_scan_rate"].to_i > 0
+
+      # A device whose last connect FAILED does not wait the full info_scan_rate
+      # to be tried again. The stamp above is written when a scan is ENQUEUED, not
+      # when it succeeds, so without this a single failed connect costs the device
+      # the entire success cadence (600s by default) before anyone looks at it
+      # again - and for the private addresses that dominate this path, the address
+      # itself has likely rotated by then, so that retry never reaches the device
+      # we were after. Bounded by ConnectTracker::STRIKE_LIMIT, which is what
+      # keeps a short interval from becoming a spin.
+      #
+      # Scoped to :le on purpose. Every strike in the tracker comes from an LE
+      # connect attempt, and the tracker is keyed on the full address, so a
+      # dual-mode device's LE failures would otherwise shorten its CLASSIC cadence
+      # as well - and a failed LE connect is no evidence at all about whether the
+      # device answers a classic page. Classic gets its own accounting if and when
+      # TODO item 13 extends strikes to it.
+      interval = if mode == :le && BlueHydra::ConnectTracker.retry_soon?(address)
+                   BlueHydra::ConnectTracker::FAILED_RETRY_INTERVAL
+                 else
+                   BlueHydra.config["info_scan_rate"].to_i
+                 end
+
+      if (Time.now.to_i - interval) >= last_info
+        queue.push({command: command, address: address, le_address_type: le_address_type})
+        self.query_history[track_addr][mode] = Time.now.to_i
       end
     end
 
@@ -1737,6 +1842,21 @@ module BlueHydra
 
               if result[:address]
                 device = BlueHydra::Device.update_or_create_from_result(result)
+
+                # Record what this advertisement said about connectability for the
+                # discovery thread's connect gate (BlueHydra::ConnectTracker).
+                #
+                # Done for every result rather than only the ones we are about to
+                # scan, so the observation still accumulates while a device sits
+                # inside its info_scan_rate cooldown. le_connectable is policy
+                # rather than device data, so it is deliberately not a Device
+                # attribute - the model's allowlists ignore it, and it is read
+                # straight off the result here in the result thread.
+                if result[:le_connectable]
+                  result[:le_connectable].uniq.each do |connectable|
+                    BlueHydra::ConnectTracker.record_connectable(device.address, connectable)
+                  end
+                end
 
                 unless BlueHydra.config["file"]
                   if device.le_mode

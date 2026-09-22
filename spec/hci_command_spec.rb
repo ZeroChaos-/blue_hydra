@@ -102,3 +102,39 @@ describe BlueHydra::HciCommand do
     end
   end
 end
+
+# This reader thread issues a Read Remote Version of its own accord on every LE
+# Connection Complete, and it stays alive until #close, which Runner#stop calls
+# AFTER the shutdown reset. Connections can still complete in that window - the
+# kernel auto-connect list is populated right up to the power-off - so it has to
+# be told we are stopping, for the same reason BlueHydra::Mgmt does.
+describe "BlueHydra::HciCommand shutdown" do
+  let(:hci) { BlueHydra::HciCommand.new(0) }
+
+  def le_connection_complete(handle = 0x0040)
+    [0x04, 0x3e, 0x13, BlueHydra::HciCommand::SUB_LE_CONNECTION_COMPLETE,
+     0x00, handle].pack("CCCCCS<") + ("\x00" * 6)
+  end
+
+  before { allow(BlueHydra.logger).to receive(:debug) }
+
+  it "reads the remote version for a new connection while running" do
+    expect(hci).to receive(:read_remote_version).with(0x0040)
+    hci.send(:handle_packet, le_connection_complete)
+  end
+
+  it "issues nothing once we are shutting down" do
+    hci.stopping!
+    expect(hci).not_to receive(:read_remote_version)
+    hci.send(:handle_packet, le_connection_complete)
+  end
+
+  # no log either: a line claiming a version read we did not attempt is worse
+  # than silence
+  it "does not log a version read it is not doing" do
+    hci.stopping!
+    allow(hci).to receive(:read_remote_version)
+    hci.send(:handle_packet, le_connection_complete)
+    expect(BlueHydra.logger).not_to have_received(:debug).with(/reading remote version/)
+  end
+end

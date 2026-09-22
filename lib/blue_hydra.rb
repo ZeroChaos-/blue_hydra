@@ -80,7 +80,16 @@ module BlueHydra
     "ignore_mac"         => [],           # completely ignore a mac address, both ui and db
     "signal_spitter"     => false,        # make raw signal strength api available on localhost:1124
     "chunker_debug"      => false,
-    "le_connect_parallel" => 10           # max simultaneous direct LE connects (private-address devices)
+    "le_connect_parallel" => 10,          # max simultaneous direct LE connects (private-address devices)
+    # Attempt connects to devices that advertise themselves as non-connectable
+    # (ADV_NONCONN_IND / ADV_SCAN_IND). Off by default because such a device
+    # cannot accept a connection, so the attempt is a guaranteed failure that
+    # costs a batch slot and discovery-off time: over a 47 hour run 733 of the
+    # 1329 addresses we attempted had never once advertised as connectable.
+    # Devices we have no advertising opinion on yet are still attempted; only a
+    # device that has said "not connectable" and never said otherwise is skipped.
+    # See BlueHydra::ConnectTracker.
+    "connect_to_nonconnectable" => false
   }
 
   # Create config file with defaults if missing or load and update.
@@ -384,6 +393,7 @@ rescue LoadError => e
 end
 
 require 'blue_hydra/chunker'
+require 'blue_hydra/connect_tracker'
 require 'blue_hydra/mgmt'
 require 'blue_hydra/hci_command'
 require 'blue_hydra/l2ping'

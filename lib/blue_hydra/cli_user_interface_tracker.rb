@@ -247,10 +247,19 @@ module BlueHydra
       ].each do |key|
         if attrs[key] && attrs[key].first
           if cui_status[@uuid][key] != attrs[key].first
+            # The newest reading in the batch. A batch can hold many advertising
+            # reports for one device, and .first showed the oldest of them - so a
+            # device walking away read stronger than it was.
             if key == :le_rssi || key == :classic_rssi
-              cui_status[@uuid][:rssi] = attrs[key].first[:rssi].gsub('dBm','')
+              cui_status[@uuid][:rssi] = attrs[key].last[:rssi].gsub('dBm','')
+            # The newest estimate, not .first like its neighbours. The parser emits
+            # one range per chunk, so a batch holds a series of estimates for a
+            # beacon that is probably moving, and .first is the oldest of them.
+            # Device.update_or_create_from_result stores .last for the same reason;
+            # the table a human watches during a run should not disagree with what
+            # went into the DB.
             elsif key == :ibeacon_range
-              cui_status[@uuid][:range] = "#{attrs[key].first}m"
+              cui_status[@uuid][:range] = "#{attrs[key].last}m"
             elsif key == :company
               cui_status[@uuid][:company] = attrs[key].first.split('(').first
             else

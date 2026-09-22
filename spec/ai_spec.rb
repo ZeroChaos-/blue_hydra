@@ -365,6 +365,23 @@ describe BlueHydra::CliUserInterfaceTracker do
     expect(status[:type]).to eq("Watch ")
   end
 
+  # The parser emits one range per chunk, so a batch is a series of estimates for
+  # a beacon that is probably moving. The table has to show the newest, and agree
+  # with what Device.update_or_create_from_result stored (also the last).
+  it "shows the newest range estimate in a batch, not the oldest" do
+    runner = FakeRunner.new
+    addr   = "AA:BB:CC:DD:EE:21"
+    tracker = BlueHydra::CliUserInterfaceTracker.new(
+      runner,
+      [["      LE Advertising Report (0x02)"]],
+      { address: [addr], last_seen: [Time.now.to_i], ibeacon_range: [2.5, 9.75] },
+      addr
+    )
+    tracker.update_cui_status
+
+    expect(runner.cui_status.values.first[:range]).to eq("9.75m")
+  end
+
   it "keeps the LE version label when the subversion hex contains 00 or ff" do
     runner = FakeRunner.new
     chunk  = [["      LE Advertising Report (0x02)"]]
@@ -630,8 +647,26 @@ describe "BlueHydra::Parser branch handling" do
     expect(attrs[:classic_proximity_uuid]).to_not eq(nil)
     expect(attrs[:classic_major_num]).to_not eq(nil)
     expect(attrs[:classic_minor_num]).to_not eq(nil)
-    expect(attrs[:classic_tx_power]).to eq(["-56 dB"])
     expect(attrs[:classic_company_data]).to eq(["01adddd439aed386c76574e9ab9e11958e25c1f70ae203"])
+  end
+
+  # "-56 dB" is the beacon's measured power - the RSSI it calibrates to one metre.
+  # It used to land in classic_tx_power/le_tx_power, which meant that column held
+  # a reference RSSI in the wrong units, and on a beacon advertising no AD Tx
+  # Power element it held nothing else.
+  it "keeps an iBeacon's measured power out of the TX power attribute" do
+    attrs = parse([
+      "> HCI Event: Extended Inquiry Result (0x2f) plen 1",
+      "        Status: Success (0x00)",
+      "        Company: Apple, Inc. (76)",
+      "          Type: iBeacon (2)",
+      "          UUID: 7988f2b6-dc41-1291-8746-ecf83cc7a06c",
+      "          Version: 15104.61591",
+      "          TX power: -56 dB",
+      "          Data: 01adddd439aed386c76574e9ab9e11958e25c1f70ae203"
+    ])
+    expect(attrs[:classic_tx_power]).to be_nil
+    expect(attrs[:classic_ibeacon_measured_power]).to eq(["-56 dB"])
   end
 
   it "parses a Company block with non-ibeacon types" do
@@ -659,6 +694,212 @@ describe "BlueHydra::Parser branch handling" do
     ])
     expect(attrs[:address]).to eq(["11:22:33:44:55:66"])
     expect(attrs[:name]).to eq(["BeaconThing"])
+  end
+end
+
+#############################################################################
+# TX power: four different quantities, one label
+#############################################################################
+# btmon prints "TX power:" for the device's advertised power, an iBeacon's
+# measured power, our own controller's power, and the report field's
+# not-available sentinel. One regex swept up all four, so a single advertising
+# report fed two quantities into one Text column and Device resolved them by
+# lexical sort - which ranked the sentinel "127 dBm" above a real "3 dBm".
+#
+# Reproduced on a 9 minute device capture: 88 of 1051 chunks carried a conflict,
+# and the two addresses that flapped in the device's own log came out storing
+# "127 dBm" and "-59 dB" respectively.
+describe "BlueHydra::Parser TX power sources" do
+  def parse(lines)
+    chunk = lines + ["last_seen: 1500000000"]
+    p = BlueHydra::Parser.new([chunk])
+    p.parse
+    p.attributes
+  end
+
+  def le_report(*data_lines)
+    [
+      "> HCI Event: LE Meta Event (0x3e) plen 1",
+      "      LE Extended Advertising Report (0x0d)",
+      "        Address: AA:BB:CC:DD:EE:FF (OUI)"
+    ] + data_lines
+  end
+
+  it "records the device's advertised TX power" do
+    attrs = parse(le_report("        TX power: 3 dBm"))
+    expect(attrs[:le_tx_power]).to eq(["3 dBm"])
+  end
+
+  it "records a negative advertised TX power" do
+    attrs = parse(le_report("        TX power: -12 dBm"))
+    expect(attrs[:le_tx_power]).to eq(["-12 dBm"])
+  end
+
+  # 0x7f, the report field's "information not available". Not a reading, and no
+  # transmitter emits +127 dBm, so it is dropped wherever it appears.
+  it "drops the not-available sentinel" do
+    attrs = parse(le_report("        TX power: 127 dBm"))
+    expect(attrs[:le_tx_power]).to be_nil
+  end
+
+  # the exact shape that flapped on device: the sentinel and the real value in
+  # one report. Only the real one may survive, or the lexical sort in Device
+  # picks the sentinel.
+  it "keeps only the real value when the sentinel arrives alongside it" do
+    attrs = parse(le_report(
+      "        TX power: 127 dBm",
+      "        Name (complete): 84C8D48AFC5E4102",
+      "        TX power: 3 dBm"
+    ))
+    expect(attrs[:le_tx_power]).to eq(["3 dBm"])
+  end
+
+  # our own controller answering an HCI read. bluez prints these lowercase with
+  # the raw byte; BtmonHandler drops them upstream, so this is belt and braces.
+  it "ignores our own controller's TX power" do
+    attrs = parse(le_report("        TX power: 12 dbm (0x0c)"))
+    expect(attrs[:le_tx_power]).to be_nil
+  end
+
+  it "ignores an unparseable TX power" do
+    attrs = parse(le_report("        TX power: unavailable"))
+    expect(attrs[:le_tx_power]).to be_nil
+  end
+end
+
+#############################################################################
+# iBeacon proximity UUID grouping
+#############################################################################
+# The UUID used to be regrouped with four capture groups where a UUID has five,
+# so the last 16 characters came out as one blob. The hex was right; a dash was
+# missing. It affected every iBeacon sighting - 64 of 64 in a 9 minute capture.
+describe "BlueHydra::Parser proximity UUID" do
+  def parse(lines)
+    chunk = lines + ["last_seen: 1500000000"]
+    p = BlueHydra::Parser.new([chunk])
+    p.parse
+    p.attributes
+  end
+
+  def beacon(uuid)
+    parse([
+      "> HCI Event: LE Meta Event (0x3e) plen 1",
+      "      LE Extended Advertising Report (0x0d)",
+      "        Address: AA:BB:CC:DD:EE:FF (OUI)",
+      "        Company: Apple, Inc. (76)",
+      "          Type: iBeacon (2)",
+      "          UUID: #{uuid}",
+      "          Version: 15104.61591",
+      "          TX power: -59 dB"
+    ])
+  end
+
+  # taken from a real capture: these exact wire bytes produced the misgrouped
+  # "74278bda-b644-4520-8f0c720eaf059935"
+  it "groups the UUID 8-4-4-4-12" do
+    attrs = beacon("359905af-0e72-0c8f-2045-44b6da8b2774")
+    expect(attrs[:le_proximity_uuid]).to eq(["74278bda-b644-4520-8f0c-720eaf059935"])
+  end
+
+  it "produces a canonically shaped UUID" do
+    uuid = beacon("359905af-0e72-0c8f-2045-44b6da8b2774")[:le_proximity_uuid].first
+    expect(uuid).to match(/\A\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\z/)
+  end
+
+  # the byte reversal undoes bluez printing this UUID back to front, and must
+  # survive any future tidying of the regrouping
+  it "reverses the byte order bluez printed, recovering the wire bytes" do
+    uuid = beacon("359905af-0e72-0c8f-2045-44b6da8b2774")[:le_proximity_uuid].first
+    expect(uuid.delete("-")).to eq("74278bdab64445208f0c720eaf059935")
+  end
+
+  # an empty or partial UUID is worse than none: it is an identity key for a
+  # rotated address, so two unrelated beacons that both failed to parse would
+  # resolve to one record
+  it "records nothing for a UUID that is not 16 bytes" do
+    expect(beacon("359905af-0e72-0c8f")[:le_proximity_uuid]).to be_nil
+  end
+
+  it "records nothing for a non-hex UUID" do
+    expect(beacon("zzzzzzzz-0e72-0c8f-2045-44b6da8b2774")[:le_proximity_uuid]).to be_nil
+  end
+end
+
+#############################################################################
+# iBeacon range
+#############################################################################
+# The range was computed inline with the RSSI line from a value parsed later in
+# the same chunk, so it was always nil and the estimate never happened - 0 of 64
+# iBeacon chunks in a 9 minute capture produced one, and the CUI has a column for
+# it that was therefore always blank.
+describe "BlueHydra::Parser iBeacon range" do
+  def parse(lines)
+    chunk = lines + ["last_seen: 1500000000"]
+    p = BlueHydra::Parser.new([chunk])
+    p.parse
+    p.attributes
+  end
+
+  # RSSI first, then the manufacturer data: the order btmon actually emits, and
+  # the order that used to defeat the calculation.
+  def beacon_chunk(rssi, measured)
+    [
+      "> HCI Event: LE Meta Event (0x3e) plen 1",
+      "      LE Extended Advertising Report (0x0d)",
+      "        Address: AA:BB:CC:DD:EE:FF (OUI)",
+      "        RSSI: #{rssi} dBm (0xab)",
+      "        Company: Apple, Inc. (76)",
+      "          Type: iBeacon (2)",
+      "          UUID: 7988f2b6-dc41-1291-8746-ecf83cc7a06c",
+      "          Version: 15104.61591",
+      "          TX power: #{measured} dB"
+    ]
+  end
+
+  it "estimates the range even though RSSI is printed before the measured power" do
+    attrs = parse(beacon_chunk(-85, -59))
+    expect(attrs[:ibeacon_range]).to eq([Math.sqrt(10 ** (26 / 10.0)).round(2)])
+  end
+
+  # at the calibration distance the ratio is 0 dB, so the estimate is 1 metre -
+  # a fixed point that catches the ratio being inverted
+  it "estimates one metre when the RSSI equals the measured power" do
+    attrs = parse(beacon_chunk(-59, -59))
+    expect(attrs[:ibeacon_range]).to eq([1.0])
+  end
+
+  it "estimates further away as the RSSI weakens" do
+    near = parse(beacon_chunk(-65, -59))[:ibeacon_range].first
+    far  = parse(beacon_chunk(-85, -59))[:ibeacon_range].first
+    expect(far).to be > near
+  end
+
+  it "does not guess a range for a device that is not a beacon" do
+    attrs = parse([
+      "> HCI Event: LE Meta Event (0x3e) plen 1",
+      "      LE Extended Advertising Report (0x0d)",
+      "        Address: AA:BB:CC:DD:EE:FF (OUI)",
+      "        RSSI: -85 dBm (0xab)",
+      "        TX power: 3 dBm"
+    ])
+    expect(attrs[:ibeacon_range]).to be_nil
+  end
+
+  # the measured power belongs to the chunk that carried it; a later report from
+  # the same batch must not borrow another beacon's calibration
+  it "does not carry a measured power into a later chunk" do
+    beacon = beacon_chunk(-85, -59) + ["last_seen: 1500000000"]
+    plain  = [
+      "> HCI Event: LE Meta Event (0x3e) plen 1",
+      "      LE Extended Advertising Report (0x0d)",
+      "        Address: AA:BB:CC:DD:EE:FF (OUI)",
+      "        RSSI: -70 dBm (0xba)",
+      "last_seen: 1500000001"
+    ]
+    p = BlueHydra::Parser.new([beacon, plain])
+    p.parse
+
+    expect(p.attributes[:ibeacon_range].count).to eq(1)
   end
 end
 
@@ -1031,8 +1272,11 @@ describe "BlueHydra::Runner helpers" do
 
       it "shortens the batch deadline by time discovery was already off" do
         runner = runner_for_phase(2)
-        # a previous phase already spent 5 of the 6 second budget
-        allow(fake_mgmt).to receive(:discovery_off_for).and_return(5.0)
+        # a previous phase already spent all but one second of the budget. Derived
+        # from the constant rather than hardcoded, so tuning the budget does not
+        # silently turn this into a test of nothing.
+        already_off = BlueHydra::Runner::DISCOVERY_OFF_BUDGET - 1
+        allow(fake_mgmt).to receive(:discovery_off_for).and_return(already_off.to_f)
         deadlines = []
         fake_connect = double("le_connect")
         allow(fake_connect).to receive(:connect_batch) do |entries, deadline|
@@ -1044,8 +1288,10 @@ describe "BlueHydra::Runner helpers" do
         started = Time.now
         runner.le_direct_connect_phase
 
-        # roughly one second left, not a fresh six
-        expect(deadlines.first - started).to be < 2.0
+        # about the one second that was left, not a fresh full budget
+        remaining = deadlines.first - started
+        expect(remaining).to be < 2.0
+        expect(remaining).to be < BlueHydra::Runner::DISCOVERY_OFF_BUDGET
       end
 
       it "never hands out a zero or negative deadline" do
@@ -1770,17 +2016,18 @@ describe "BlueHydra::Runner discovery failure handling" do
     )
   end
 
-  it "distinguishes a first-cycle failure from two in a row" do
+  it "distinguishes a first-cycle failure from repeated ones" do
     expect_exit_1 { runner.discovery_failed_fatal(BlueHydra::Mgmt::STATUS_REJECTED) }
     expect(BlueHydra.logger).to have_received(:fatal).with(/on the first discovery cycle/)
 
-    expect_exit_1 { runner.discovery_failed_fatal(BlueHydra::Mgmt::STATUS_BUSY, retried: true) }
-    expect(BlueHydra.logger).to have_received(:fatal).with(/twice in a row/)
+    expect_exit_1 { runner.discovery_failed_fatal(BlueHydra::Mgmt::STATUS_REJECTED, attempts: 2) }
+    expect(BlueHydra.logger).to have_received(:fatal).with(/2 times in a row/)
   end
 
-  # One failure is a transient issue; two in a row is a pattern. But on the very
-  # first cycle nothing has ever worked, so there is nothing to call transient -
-  # that is the DART case, which ran for hours answering REJECTED to everything.
+  # A refusal may be transient, so it is retried; only a controller that refuses
+  # every attempt is called dead. But on the very first cycle nothing has ever
+  # worked, so there is nothing to call transient - that is the DART case, which
+  # ran for hours answering REJECTED to everything.
   describe "retry policy" do
     before do
       allow(BlueHydra.logger).to receive(:info)
@@ -1802,7 +2049,7 @@ describe "BlueHydra::Runner discovery failure handling" do
       expect(BlueHydra.logger).to have_received(:fatal).with(/on the first discovery cycle/)
     end
 
-    it "retries once after a pause and carries on when the retry works" do
+    it "retries after a pause and carries on when a retry works" do
       runner.instance_variable_set(:@discovery_ever_started, true)
       runner.mgmt = instance_double(
         BlueHydra::Mgmt,
@@ -1810,15 +2057,36 @@ describe "BlueHydra::Runner discovery failure handling" do
         start_discovery: BlueHydra::Mgmt::STATUS_SUCCESS
       )
 
-      status = runner.retry_start_discovery(BlueHydra::Mgmt::STATUS_BUSY)
+      status = runner.retry_start_discovery(BlueHydra::Mgmt::STATUS_REJECTED)
 
       expect(status).to eq(BlueHydra::Mgmt::STATUS_SUCCESS)
-      expect(runner).to have_received(:sleep).with(BlueHydra::Runner::START_DISCOVERY_RETRY_DELAY)
-      expect(BlueHydra.logger).to have_received(:warn).with(/retrying once in 8s/)
-      expect(BlueHydra.logger).to have_received(:info).with(/recovered on retry/)
+      expect(runner).to have_received(:sleep).with(BlueHydra::Runner::START_DISCOVERY_RETRY_DELAY).once
+      expect(BlueHydra.logger).to have_received(:warn).with(/on attempt 1 of 2, retrying in 8s/)
+      expect(BlueHydra.logger).to have_received(:info).with(/recovered on attempt 2/)
     end
 
-    it "is fatal when the retry fails too" do
+    # BUSY means discovery is already running, so a retry that comes back BUSY has
+    # found what it was looking for - it must not burn the remaining attempts and
+    # must not end in a fatal.
+    it "accepts a retry that comes back BUSY as recovered" do
+      runner.instance_variable_set(:@discovery_ever_started, true)
+      runner.mgmt = instance_double(
+        BlueHydra::Mgmt,
+        enabled_transports: ["BREDR", "LE"],
+        start_discovery: BlueHydra::Mgmt::STATUS_BUSY
+      )
+
+      status = runner.retry_start_discovery(BlueHydra::Mgmt::STATUS_REJECTED)
+
+      expect(status).to eq(BlueHydra::Mgmt::STATUS_BUSY)
+      expect(runner.mgmt).to have_received(:start_discovery).once
+      expect(BlueHydra.logger).to have_received(:info).with(/recovered on attempt 2/)
+      expect(BlueHydra.logger).not_to have_received(:fatal)
+    end
+
+    # One retry, then the verdict. More attempts do not buy tolerance for anything
+    # that reaches here - they only postpone the exit - so the count stays at two.
+    it "is fatal once the single retry also fails" do
       runner.instance_variable_set(:@discovery_ever_started, true)
       runner.mgmt = instance_double(
         BlueHydra::Mgmt,
@@ -1828,16 +2096,17 @@ describe "BlueHydra::Runner discovery failure handling" do
 
       expect_exit_1 { runner.retry_start_discovery(BlueHydra::Mgmt::STATUS_REJECTED) }
 
+      expect(runner.mgmt).to have_received(:start_discovery).once # plus the caller's own
       expect(runner).to have_received(:sleep).once
-      expect(BlueHydra.logger).to have_received(:fatal).with(/twice in a row/)
+      expect(BlueHydra.logger).to have_received(:fatal).with(/2 times in a row/)
       expect(BlueHydra).to have_received(:send_event).with(
         'blue_hydra',
         hash_including(key: 'blue_hydra_start_discovery_failed', severity: 'FATAL')
       )
     end
 
-    # At least 6s so a busy controller has a real chance to answer, no more than
-    # 10s so a dead unit is not left sitting there.
+    # At least 6s so a controller that is merely slow has a real chance to answer,
+    # no more than 10s so a dead unit is not left sitting there.
     it "waits between 6 and 10 seconds before the retry" do
       expect(BlueHydra::Runner::START_DISCOVERY_RETRY_DELAY).to be_between(6, 10)
     end
@@ -1858,19 +2127,100 @@ describe "BlueHydra::Runner discovery failure handling" do
   end
 
   # Mid-cycle resumes are a different case: the cycle's own start_discovery
-  # already succeeded, so a refusal here is new and most likely the controller
-  # busy servicing a connect. If it is not transient, the next cycle's start is
-  # where it becomes fatal.
+  # already succeeded, so a refusal here is new. If it is not transient, the next
+  # cycle's start is where it becomes fatal.
   it "only warns when a mid-cycle resume is refused" do
-    runner.warn_resume_failed("after connect phase", BlueHydra::Mgmt::STATUS_BUSY)
+    runner.warn_resume_failed("after connect phase", BlueHydra::Mgmt::STATUS_REJECTED)
     expect(BlueHydra.logger).to have_received(:warn)
-      .with(/resume discovery after connect phase failed.*BUSY/)
+      .with(/resume discovery after connect phase failed.*REJECTED/)
     expect(BlueHydra).not_to have_received(:send_event)
   end
 
   it "says nothing when a resume succeeds" do
     runner.warn_resume_failed("mid-drain", BlueHydra::Mgmt::STATUS_SUCCESS)
     expect(BlueHydra.logger).not_to have_received(:warn)
+  end
+
+  # A resume racing a reader-thread re-arm is the normal case, not a fault: the
+  # re-arm got there first and discovery is on. Warning about it trained the log
+  # to cry wolf on the one status that proves the radio is scanning.
+  it "says nothing when a resume finds discovery already running" do
+    runner.warn_resume_failed("after connect phase", BlueHydra::Mgmt::STATUS_BUSY)
+    expect(BlueHydra.logger).not_to have_received(:warn)
+  end
+end
+
+# The crash this prevents: a 9 minute on-device run exited FATAL with "start
+# discovery failed 3 times in a row ... 0x0a (BUSY)" while Device Found events
+# were still arriving. Every one of those three BUSY answers came back in under
+# 10 microseconds with no HCI traffic behind it, because discovery was already
+# running - started by our own reader-thread re-arm, which won the race for the
+# window between the cycle's hci_reset and the cycle's own start_discovery.
+#
+# Retrying could never have fixed it, at any count. Each pause gave the reader
+# thread more time to keep discovery alive, so every attempt was refused for the
+# same reason - an earlier run died the same way on two attempts.
+describe "BlueHydra::Mgmt.discovery_on?" do
+  it "counts SUCCESS as discovery running" do
+    expect(BlueHydra::Mgmt.discovery_on?(BlueHydra::Mgmt::STATUS_SUCCESS)).to be true
+  end
+
+  # the whole point: the kernel answers BUSY only when discovery.state is not
+  # DISCOVERY_STOPPED, so BUSY is "already scanning", not "refused to scan"
+  it "counts BUSY as discovery running" do
+    expect(BlueHydra::Mgmt.discovery_on?(BlueHydra::Mgmt::STATUS_BUSY)).to be true
+  end
+
+  it "does not count a genuine refusal" do
+    expect(BlueHydra::Mgmt.discovery_on?(BlueHydra::Mgmt::STATUS_REJECTED)).to be false
+  end
+
+  # a powered-down controller answers NOT_POWERED, never BUSY, so the two cannot
+  # be conflated by this predicate
+  it "does not count a powered-down controller" do
+    expect(BlueHydra::Mgmt.discovery_on?(BlueHydra::Mgmt::STATUS_NOT_POWERED)).to be false
+  end
+end
+
+describe "BlueHydra::Runner discovery cycle racing its own re-arm" do
+  let(:runner) { BlueHydra::Runner.new }
+
+  before do
+    allow(BlueHydra.logger).to receive(:debug)
+    allow(BlueHydra.logger).to receive(:fatal)
+    allow(BlueHydra.logger).to receive(:warn)
+    allow(BlueHydra).to receive(:send_event)
+    allow(runner).to receive(:hci_reset)
+    allow(runner).to receive(:sleep)
+    allow(BlueHydra).to receive(:info_scan).and_return(false)
+  end
+
+  it "carries on when the cycle's own Start Discovery finds discovery running" do
+    runner.mgmt = instance_double(
+      BlueHydra::Mgmt,
+      enabled_transports: ["BREDR", "LE"],
+      start_discovery: BlueHydra::Mgmt::STATUS_BUSY
+    )
+
+    expect { runner.run_mgmt_discovery(30) }.not_to raise_error
+
+    expect(runner.mgmt).to have_received(:start_discovery).once # no retries
+    expect(BlueHydra.logger).not_to have_received(:fatal)
+    expect(BlueHydra).not_to have_received(:send_event)
+    expect(BlueHydra.logger).to have_received(:debug)
+      .with(/start discovery answered 0x0a \(BUSY\), discovery was already running/)
+  end
+
+  it "still sleeps out the discovery window rather than spinning" do
+    runner.mgmt = instance_double(
+      BlueHydra::Mgmt,
+      enabled_transports: ["BREDR", "LE"],
+      start_discovery: BlueHydra::Mgmt::STATUS_BUSY
+    )
+
+    runner.run_mgmt_discovery(30)
+
+    expect(runner).to have_received(:sleep).with(30)
   end
 end
 
@@ -1912,5 +2262,256 @@ describe "BlueHydra::CliUserInterface transport labelling" do
   it "keeps the original wording while the transports are unknown" do
     expect(cui_with(nil).devices_seen_label).to eq("Devices Seen in last 300s")
     expect(cui_with(:no_mgmt).devices_seen_label).to eq("Devices Seen in last 300s")
+  end
+end
+
+# Don't spend a connect on a device that cannot answer. Two independent gates,
+# both consulted in request_leinfo so they cover the kernel auto-connect path and
+# the direct-connect path alike. See BlueHydra::ConnectTracker.
+describe "BlueHydra::Runner connect gating" do
+  let(:runner) { BlueHydra::Runner.new }
+  let(:mac)    { "7A:BB:CC:DD:EE:FF" }   # random static => auto-connect path
+  let(:rpa)    { "55:BB:CC:DD:EE:FF" }   # resolvable private => direct path
+
+  before do
+    BlueHydra::ConnectTracker.reset!
+    BlueHydra.config["connect_to_nonconnectable"] = false
+    allow(BlueHydra.logger).to receive(:debug)
+    runner.auto_connect_list = {}
+    runner.le_pending        = {}
+    runner.le_direct_pending = {}
+    runner.mgmt = instance_double(
+      BlueHydra::Mgmt,
+      add_device:    BlueHydra::Mgmt::STATUS_SUCCESS,
+      remove_device: BlueHydra::Mgmt::STATUS_SUCCESS
+    )
+  end
+
+  after { BlueHydra::ConnectTracker.reset! }
+
+  describe "connectability gate" do
+    it "attempts a device we have no advertising opinion on yet" do
+      runner.request_leinfo(rpa, "Random")
+      expect(runner.le_direct_pending).to have_key(rpa)
+    end
+
+    it "attempts a device that advertised connectable" do
+      BlueHydra::ConnectTracker.record_connectable(rpa, true)
+      runner.request_leinfo(rpa, "Random")
+      expect(runner.le_direct_pending).to have_key(rpa)
+    end
+
+    it "skips a device that only ever advertised non-connectable" do
+      BlueHydra::ConnectTracker.record_connectable(rpa, false)
+      runner.request_leinfo(rpa, "Random")
+      expect(runner.le_direct_pending).to be_empty
+    end
+
+    it "attempts it anyway when connect_to_nonconnectable is on" do
+      BlueHydra.config["connect_to_nonconnectable"] = true
+      BlueHydra::ConnectTracker.record_connectable(rpa, false)
+      runner.request_leinfo(rpa, "Random")
+      expect(runner.le_direct_pending).to have_key(rpa)
+    end
+
+    # the gate sits ahead of the identity-address routing, so it covers the
+    # kernel auto-connect path too, not just direct connects
+    it "also gates the auto-connect path" do
+      BlueHydra::ConnectTracker.record_connectable(mac, false)
+      runner.request_leinfo(mac, "Random")
+      expect(runner.le_pending).to be_empty
+      expect(runner.auto_connect_list).to be_empty
+    end
+  end
+
+  describe "strike gate" do
+    it "stops attempting after three consecutive failures" do
+      2.times { BlueHydra::ConnectTracker.strike(rpa) }
+      runner.request_leinfo(rpa, "Random")
+      expect(runner.le_direct_pending).to have_key(rpa) # two strikes still tries
+
+      runner.le_direct_pending = {}
+      BlueHydra::ConnectTracker.strike(rpa)             # third
+      runner.request_leinfo(rpa, "Random")
+      expect(runner.le_direct_pending).to be_empty
+    end
+
+    it "applies to a device that advertises connectable" do
+      BlueHydra::ConnectTracker.record_connectable(rpa, true)
+      3.times { BlueHydra::ConnectTracker.strike(rpa) }
+      runner.request_leinfo(rpa, "Random")
+      expect(runner.le_direct_pending).to be_empty
+    end
+  end
+
+  describe "recording outcomes" do
+    it "strikes an unreachable direct connect and clears on a connected one" do
+      runner.record_le_direct_results(rpa => :unreachable)
+      expect(BlueHydra::ConnectTracker.strikes(rpa)).to eq(1)
+
+      runner.record_le_direct_results(rpa => :error)
+      expect(BlueHydra::ConnectTracker.strikes(rpa)).to eq(2)
+
+      runner.record_le_direct_results(rpa => :connected)
+      expect(BlueHydra::ConnectTracker.strikes(rpa)).to eq(0)
+    end
+
+    # abandoned means our budget ran out, which says nothing about the device
+    it "does NOT strike an abandoned direct connect" do
+      runner.record_le_direct_results(rpa => :abandoned)
+      expect(BlueHydra::ConnectTracker.strikes(rpa)).to eq(0)
+    end
+
+    it "strikes an auto-connect Connect Failed and clears on Connected" do
+      runner.auto_connect_list[mac] = { address_type: BlueHydra::Mgmt::LE_RANDOM, connected: false }
+      allow(runner.mgmt).to receive(:connection_events).and_return(
+        Queue.new.tap { |q| q << { type: :failed, address: mac } }
+      )
+      runner.process_connection_events
+      expect(BlueHydra::ConnectTracker.strikes(mac)).to eq(1)
+
+      runner.auto_connect_list[mac] = { address_type: BlueHydra::Mgmt::LE_RANDOM, connected: false }
+      allow(runner.mgmt).to receive(:connection_events).and_return(
+        Queue.new.tap { |q| q << { type: :connected, address: mac } }
+      )
+      runner.process_connection_events
+      expect(BlueHydra::ConnectTracker.strikes(mac)).to eq(0)
+    end
+
+    # an add the kernel never saw advertise is the same "no answer" the direct
+    # path calls unreachable
+    it "strikes an auto-connect entry that timed out" do
+      runner.auto_connect_list[mac] = { address_type: BlueHydra::Mgmt::LE_RANDOM, connected: false }
+      runner.clear_auto_connect
+      expect(BlueHydra::ConnectTracker.strikes(mac)).to eq(1)
+    end
+
+    it "does not strike an auto-connect entry that did connect" do
+      runner.auto_connect_list[mac] = { address_type: BlueHydra::Mgmt::LE_RANDOM, connected: true }
+      runner.clear_auto_connect
+      expect(BlueHydra::ConnectTracker.strikes(mac)).to eq(0)
+    end
+  end
+end
+
+# Strikes are in-memory and must not outlive the sighting that earned them, so
+# every offline transition drops them. That is the only expiry besides a success.
+describe "BlueHydra::Device.mark_offline" do
+  let(:mac) { "7A:BB:CC:DD:EE:11" }
+
+  before { BlueHydra::ConnectTracker.reset! }
+  after  { BlueHydra::ConnectTracker.reset! }
+
+  it "sets the status and forgets the device's strikes" do
+    3.times { BlueHydra::ConnectTracker.strike(mac) }
+    BlueHydra::ConnectTracker.record_connectable(mac, false)
+    expect(BlueHydra::ConnectTracker.struck_out?(mac)).to eq(true)
+
+    device = BlueHydra::Device.new
+    device.address = mac
+    BlueHydra::Device.mark_offline(device)
+
+    expect(device.status).to eq('offline')
+    expect(BlueHydra::ConnectTracker.strikes(mac)).to eq(0)
+    expect(BlueHydra::ConnectTracker.connectable(mac)).to be_nil
+  end
+
+  # it is the caller's job to persist; mark_offline only changes state
+  it "does not save the record itself" do
+    device = BlueHydra::Device.new
+    device.address = mac
+    expect(device).not_to receive(:save)
+    BlueHydra::Device.mark_offline(device)
+  end
+end
+
+# push_to_queue stamps query_history when a scan is ENQUEUED, not when it
+# succeeds, so a single failed connect used to cost the device the whole
+# info_scan_rate (600s default) before anyone tried again - and for the private
+# addresses that dominate the LE path, the address has usually rotated by then.
+describe "BlueHydra::Runner failed-connect retry cadence" do
+  let(:runner) { BlueHydra::Runner.new }
+  let(:mac)    { "55:BB:CC:DD:EE:FF" }
+
+  before do
+    BlueHydra::ConnectTracker.reset!
+    BlueHydra.config["info_scan_rate"] = 600
+    allow(BlueHydra.logger).to receive(:debug)
+    runner.query_history      = {}
+    runner.le_info_scan_queue = Queue.new
+  end
+
+  after { BlueHydra::ConnectTracker.reset! }
+
+  # pretend the last enqueue happened +ago+ seconds back
+  def stamp(ago)
+    runner.query_history[mac] = { le: Time.now.to_i - ago }
+  end
+
+  it "makes a device with no failures wait the full info_scan_rate" do
+    stamp(30)
+    runner.push_to_queue(:le, mac, "Random")
+    expect(runner.le_info_scan_queue).to be_empty
+
+    stamp(601)
+    runner.push_to_queue(:le, mac, "Random")
+    expect(runner.le_info_scan_queue.size).to eq(1)
+  end
+
+  it "re-queues a device whose connect failed after only FAILED_RETRY_INTERVAL" do
+    BlueHydra::ConnectTracker.strike(mac)
+    stamp(BlueHydra::ConnectTracker::FAILED_RETRY_INTERVAL + 1)
+
+    runner.push_to_queue(:le, mac, "Random")
+    expect(runner.le_info_scan_queue.size).to eq(1)
+  end
+
+  it "still honours the short floor rather than re-queueing on every sighting" do
+    BlueHydra::ConnectTracker.strike(mac)
+    stamp(BlueHydra::ConnectTracker::FAILED_RETRY_INTERVAL - 5)
+
+    runner.push_to_queue(:le, mac, "Random")
+    expect(runner.le_info_scan_queue).to be_empty
+  end
+
+  # the short interval exists to get the three attempts over with quickly; once
+  # the device is written off there is no work left to enqueue
+  it "goes back to the full cadence once the device has struck out" do
+    3.times { BlueHydra::ConnectTracker.strike(mac) }
+    stamp(BlueHydra::ConnectTracker::FAILED_RETRY_INTERVAL + 1)
+
+    runner.push_to_queue(:le, mac, "Random")
+    expect(runner.le_info_scan_queue).to be_empty
+  end
+
+  it "goes back to the full cadence after a successful connect" do
+    BlueHydra::ConnectTracker.strike(mac)
+    BlueHydra::ConnectTracker.success(mac)
+    stamp(BlueHydra::ConnectTracker::FAILED_RETRY_INTERVAL + 1)
+
+    runner.push_to_queue(:le, mac, "Random")
+    expect(runner.le_info_scan_queue).to be_empty
+  end
+
+  # three attempts at the short interval instead of three at 600s: about half a
+  # minute to resolve a device rather than half an hour
+  it "resolves three strikes inside a minute of wall clock" do
+    worst_case = BlueHydra::ConnectTracker::STRIKE_LIMIT *
+                 BlueHydra::ConnectTracker::FAILED_RETRY_INTERVAL
+    expect(worst_case).to be < 60
+    expect(worst_case).to be < BlueHydra.config["info_scan_rate"]
+  end
+
+  # Every strike comes from an LE connect, and the tracker is keyed on the full
+  # address, so without an explicit mode check a dual-mode device's LE failures
+  # would shorten its classic cadence too - which an LE failure is no evidence
+  # for. This spec is the guard on that.
+  it "leaves the classic cadence alone even when the address has LE strikes" do
+    runner.info_scan_queue = Queue.new
+    BlueHydra::ConnectTracker.strike(mac)
+    runner.query_history[mac.split(":")[2, 4].join(":")] = { classic: Time.now.to_i - 30 }
+
+    runner.push_to_queue(:classic, mac)
+    expect(runner.info_scan_queue).to be_empty
   end
 end

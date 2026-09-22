@@ -14,6 +14,45 @@ module BlueHydra
       '05': 'airdrop'
     }.freeze
 
+    # btmon prints the label "TX power:" for FOUR unrelated quantities, and the
+    # only thing separating them in the text is the unit it suffixes. From bluez
+    # monitor/packet.c:
+    #
+    #   "N dBm"          BT_EIR_TX_POWER, AD type 0x0a - the device's own
+    #                    advertised TX power, and the only one of the four that
+    #                    belongs in *_tx_power.
+    #   "N dB"           print_manufacturer_apple - an iBeacon's measured power,
+    #                    i.e. its calibrated RSSI at one metre. Not a TX power at
+    #                    all; the missing "m" is bluez saying so.
+    #   "N dbm (0xNN)"   print_power_level - OUR controller answering an HCI read
+    #                    such as Read Inquiry Response TX Power Level. Never a
+    #                    remote device's. Currently dropped upstream by the
+    #                    Command Complete filter in BtmonHandler#enqueue, so it
+    #                    does not reach here; matched on anyway so that filter is
+    #                    not load-bearing for correctness.
+    #
+    # One regex for all four meant every advertising report fed two different
+    # quantities into one Text column, which then resolved them by LEXICAL sort
+    # in Device.update_or_create_from_result - so "127 dBm" beat "3 dBm".
+    ADVERTISED_TX_POWER_RE     = /\A(-?\d+) dBm\z/.freeze
+    IBEACON_MEASURED_POWER_RE  = /\A(-?\d+) dB\z/.freeze
+
+    # The fourth quantity: the LE (Extended) Advertising Report's own TX power
+    # field holding 0x7f, which the spec defines as "information not available".
+    # It shares its printed form with the real AD element above, so it can only be
+    # recognised by value.
+    #
+    # Measured on a 9 minute capture: that field read 127 in all 974 samples
+    # across 25 devices and never once anything else - exactly one per legacy PDU
+    # carried in an extended report, because a legacy ADV_IND has no TX power to
+    # report and the controller fills in the sentinel (like the "SID: no ADI
+    # field (0xff)" printed beside it).
+    #
+    # Rejected for every source rather than just that field, because no Bluetooth
+    # transmitter emits +127 dBm - that is 5x10^12 mW - so the value is junk
+    # wherever it comes from.
+    TX_POWER_UNAVAILABLE = 127
+
     attr_accessor :attributes
 
     # initializer which takes an Array of chunks to be parsed
@@ -86,9 +125,88 @@ module BlueHydra
         # containing 1 or more lines
         grouped_chunk = group_by_depth(chunk)
 
-        # handle each chunk of grouped data individually
+        # handle each chunk of grouped data individually. The measured power is
+        # per chunk, so it is cleared before each one rather than carried between
+        # them - a beacon's calibration is not another chunk's to borrow.
+        @ibeacon_measured_power = nil
         handle_grouped_chunk(grouped_chunk, @bt_mode, timestamp)
+
+        # Derived once the chunk has been read, not inline with the RSSI line it
+        # needs, because btmon prints RSSI first. See set_ibeacon_range.
+        set_ibeacon_range(@bt_mode)
       end
+    end
+
+    # Estimate how far away an iBeacon is, from its measured power (the RSSI it
+    # calibrates to one metre) and the RSSI we actually received.
+    #
+    # Called per chunk from #parse rather than from the RSSI line, which is what
+    # made this dead code: in both report forms btmon prints RSSI before the
+    # manufacturer data carrying the measured power, so the inline version was
+    # reading a value that had not been parsed yet. Measured on a 9 minute
+    # capture, 0 of 64 iBeacon chunks produced a range - and the CUI has a column
+    # for it, so that column was permanently blank.
+    #
+    # Uses the RSSI this chunk just recorded (the last one appended), so the two
+    # halves of the ratio come from the same advertising report.
+    def set_ibeacon_range(bt_mode)
+      return unless @ibeacon_measured_power
+
+      rssi_entry = (@attributes["#{bt_mode}_rssi".to_sym] || []).last
+      return unless rssi_entry && rssi_entry[:rssi]
+
+      # Log-distance path loss with a path loss exponent of 2 (free space): the
+      # measured power is the expected RSSI at 1m, so the shortfall against it in
+      # dB converts to a power ratio and the distance is its square root.
+      ratio_db     = @ibeacon_measured_power.to_i - rssi_entry[:rssi].to_i
+      ratio_linear = 10 ** (ratio_db.to_f / 10)
+      set_attr(:ibeacon_range, Math.sqrt(ratio_linear).round(2))
+    end
+
+    # An iBeacon proximity UUID in wire order, grouped 8-4-4-4-12, or nil if the
+    # value is not a 16-byte UUID.
+    #
+    # The byte reversal is deliberate and correct: bluez prints this UUID reversed
+    # from the wire (print_manufacturer_apple reads it back to front with
+    # get_le32/get_le16 per group), so reversing the pairs recovers the wire bytes
+    # exactly. Verified byte for byte against a raw capture payload - do not
+    # "simplify" it away.
+    #
+    # Only the regrouping was ever wrong. It used to use four capture groups where
+    # a UUID has five, emitting the trailing 16 characters as one blob -
+    # "74278bda-b644-4520-8f0c720eaf059935" for what should be
+    # "74278bda-b644-4520-8f0c-720eaf059935". The hex was right; a dash was
+    # missing. Every iBeacon sighting was affected (64 of 64 in a 9 minute
+    # capture). Existing records keep the old shape until each beacon is seen
+    # again, which is accepted.
+    #
+    # Returns nil rather than a partial string on a value that does not fit,
+    # because a truncated or empty UUID is worse than none: it is one of the keys
+    # Device.update_or_create_from_result matches on when an address has rotated,
+    # so two unrelated beacons that both failed to parse would collapse into one
+    # record.
+    PROXIMITY_UUID_GROUPS = /\A(\h{8})(\h{4})(\h{4})(\h{4})(\h{12})\z/.freeze
+
+    def proximity_uuid(value)
+      wire  = value.to_s.gsub('-', '').scan(/.{2}/).reverse.join
+      match = PROXIMITY_UUID_GROUPS.match(wire)
+      return nil unless match
+      match.captures.join('-')
+    end
+
+    # The device's own advertised TX power for a "TX power:" value, or nil when
+    # the line is one of the other three things wearing that label - see
+    # ADVERTISED_TX_POWER_RE and TX_POWER_UNAVAILABLE.
+    #
+    # Returns the value unchanged rather than the parsed integer: the column is
+    # Text and holds "3 dBm", and normalising it to a number is a separate change
+    # (it would also fix Device.update_or_create_from_result resolving duplicates
+    # by lexical sort).
+    def advertised_tx_power(value)
+      match = ADVERTISED_TX_POWER_RE.match(value.to_s)
+      return nil unless match
+      return nil if match[1].to_i == TX_POWER_UNAVAILABLE
+      value
     end
 
     # The main parser case statement to handle grouped message data from a
@@ -102,7 +220,6 @@ module BlueHydra
     #   timestamp ::
     #     Unix timestamp for when this message data was created
     def handle_grouped_chunk(grouped_chunk, bt_mode, timestamp)
-      tx_power = nil
       grouped_chunk.each do |grp|
 
         # when we only have a single line in a group we can handle simply
@@ -110,7 +227,7 @@ module BlueHydra
           line = grp[0]
 
           # next line was not nested, treat as single line
-          parse_single_line(line, bt_mode, timestamp, tx_power)
+          parse_single_line(line, bt_mode, timestamp)
 
         # if we have multiple lines in our group of lines determine how to
         # process and set
@@ -125,7 +242,7 @@ module BlueHydra
             grp.each do |entry|
               if entry.count == 1
                 line = entry[0]
-                parse_single_line(line, bt_mode, timestamp, tx_power)
+                parse_single_line(line, bt_mode, timestamp)
               else
                 handle_grouped_chunk(grp, bt_mode, timestamp)
               end
@@ -142,6 +259,29 @@ module BlueHydra
             grp.shift
             vals = grp.map(&:strip)
             set_attr("#{bt_mode}_flags".to_sym, vals.join(", "))
+
+          # An EXTENDED advertising report states the PDU's properties as a
+          # bitmask with the bits named underneath:
+          #
+          #   Event type: 0x0013
+          #     Props: 0x0013
+          #       Connectable
+          #       Scannable
+          #       Use legacy advertising PDUs
+          #
+          # The Connectable bit is what decides whether a connect to this device
+          # could ever succeed, so it is worth recording: an ADV_NONCONN_IND /
+          # ADV_SCAN_IND advertiser cannot accept one. btmon carries the bit over
+          # onto a scan response as well, so the flag is usable as-is without
+          # having to special-case SCAN_RSP here.
+          #
+          # Matched on the group CONTAINING a Props bitmask rather than starting
+          # with one: by the time the report's outer "LE Extended Advertising
+          # Report" line has been shifted and the remainder re-grouped, this
+          # group's first line is "Entry 0", with Event type and Props nested
+          # under it.
+          when grp.any? { |l| l =~ /^\s+Props: 0x/ }
+            set_attr("#{bt_mode}_connectable".to_sym, grp.any? { |l| l.strip == "Connectable" })
 
 
           # Page: 1/1
@@ -245,8 +385,8 @@ module BlueHydra
                  minor = nil
                when company_line =~ /^UUID:/
                  if company_type && company_type =~ /\(2\)/ && company_type_last_set && company_type_last_set == timestamp.split(': ')[1].to_f
-                   flipped_prox_uuid = company_line.split(': ')[1].gsub('-','').scan(/.{2}/).reverse.join.scan(/(.{8})(.{4})(.{4})(.*)/).join('-')
-                   set_attr("#{bt_mode}_proximity_uuid".to_sym, flipped_prox_uuid)
+                   flipped_prox_uuid = proximity_uuid(company_line.split(': ')[1])
+                   set_attr("#{bt_mode}_proximity_uuid".to_sym, flipped_prox_uuid) if flipped_prox_uuid
                  else
                    set_attr("#{bt_mode}_company_uuid".to_sym, company_line.split(': ')[1])
                  end
@@ -260,9 +400,19 @@ module BlueHydra
                  else
                    set_attr("#{bt_mode}_company_version".to_sym, company_line.split(': ')[1])
                  end
+               # An iBeacon's measured power - its calibrated RSSI at one metre -
+               # which used to be stored as the device's TX power. It is neither
+               # the same quantity nor the same unit (see
+               # IBEACON_MEASURED_POWER_RE), and on a beacon that advertises no AD
+               # Tx Power element it was the ONLY thing in le_tx_power, so that
+               # column held a reference RSSI. It keeps its own attribute now and
+               # feeds the range estimate in set_ibeacon_range.
                when company_line =~ /^TX power:/
-                 tx_power = company_line.split(': ')[1]
-                 set_attr("#{bt_mode}_tx_power".to_sym, tx_power)
+                 measured = company_line.split(': ')[1]
+                 if IBEACON_MEASURED_POWER_RE.match(measured.to_s)
+                   @ibeacon_measured_power = measured
+                   set_attr("#{bt_mode}_ibeacon_measured_power".to_sym, measured)
+                 end
                when company_line =~ /^Data:/
                  set_attr("#{bt_mode}_company_data".to_sym, company_line.split(': ')[1])
                end
@@ -340,7 +490,7 @@ module BlueHydra
       end
     end
 
-    def parse_single_line(line, bt_mode, timestamp, tx_power=nil)
+    def parse_single_line(line, bt_mode, timestamp)
       line = line.strip
       case
 
@@ -383,8 +533,29 @@ module BlueHydra
       when line =~ /^Address type:/
         set_attr("#{bt_mode}_address_type".to_sym, line.split(': ')[1])
 
+      # A LEGACY advertising report names the PDU type on one line instead of
+      # nesting a Props bitmask (see the grouped Event type case in
+      # handle_grouped_chunk for the extended form):
+      #
+      #   Event type: Connectable undirected - ADV_IND (0x00)
+      #   Event type: Non connectable undirected - ADV_NONCONN_IND (0x03)
+      #   Event type: Scannable undirected - ADV_SCAN_IND (0x02)
+      #   Event type: Scan response - SCAN_RSP (0x04)
+      #
+      # Only a name starting with "Connectable" means connectable - "Non
+      # connectable" and "Scannable" (ADV_SCAN_IND) both do not. A scan response
+      # says nothing either way, so it records nothing rather than recording
+      # false. A bare "0x...." value is the extended form's bitmask arriving here
+      # ungrouped; the flags are not on this line, so it is skipped too.
+      when line =~ /^Event type:/
+        value = line.split(': ', 2)[1].to_s
+        unless value =~ /\A0x/ || value =~ /Scan response/i
+          set_attr("#{bt_mode}_connectable".to_sym, !!(value =~ /\AConnectable/))
+        end
+
       when line =~ /^TX power:/
-        set_attr("#{bt_mode}_tx_power".to_sym, line.split(': ')[1])
+        value = advertised_tx_power(line.split(': ')[1])
+        set_attr("#{bt_mode}_tx_power".to_sym, value) if value
 
       when line =~ /^Name \(short\):/
         set_attr("short_name".to_sym, line.split(': ')[1])
@@ -413,18 +584,16 @@ module BlueHydra
       when line =~ /^Appearance:/
         set_attr(:appearance, line.split(': ')[1])
 
+      # The iBeacon range used to be derived here, from a tx_power threaded in by
+      # handle_grouped_chunk. It never fired: btmon prints RSSI BEFORE the
+      # manufacturer data that carries the measured power, in both report forms,
+      # so the value was always still nil at this point. See set_ibeacon_range,
+      # which runs once the whole chunk has been read.
       when line =~ /^RSSI:/
-        rssi = line.split(': ')[1].split(' ')[0,2].join(' ')
         set_attr("#{bt_mode}_rssi".to_sym, {
           t: timestamp.split(': ')[1].to_i,
-          rssi: rssi
+          rssi: line.split(': ')[1].split(' ')[0,2].join(' ')
         })
-        if tx_power
-          ratio_db = tx_power.to_i - rssi.to_i
-          ratio_linear = 10 ** ( ratio_db.to_f / 10 )
-          ibeacon_range = Math.sqrt(ratio_linear).round(2)
-          set_attr(:ibeacon_range, ibeacon_range)
-        end
 
 
       else
