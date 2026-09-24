@@ -343,8 +343,24 @@ module BlueHydra
 
   # send_event is the base notification dispatcher. It fans an event out to
   # each notification service that is enabled. Pulse receives the event as-is.
-  # Stream Builder receives it as a metric named after the event key, with the
+  # Stream Builder receives it as a metric named after the event, with the
   # severity attached as a (low cardinality) dimension.
+  #
+  # The metric name comes from hash[:key], not from the positional key. Every
+  # caller passes 'blue_hydra' positionally -- that is the event *type* Pulse
+  # files under -- and puts the event identity in hash[:key]. Naming the metric
+  # after the positional argument collapses every event Blue Hydra can raise into
+  # a single "blue_hydra" metric, which cannot be alarmed on: a db corruption and
+  # a disabled radio become indistinguishable. Events with no :key fall back to
+  # the positional value.
+  #
+  # An event may carry :dimensions, an array of {"name"=>, "value"=>} hashes,
+  # to be appended after severity. This exists because the metric name alone
+  # cannot always identify what an event is about: report_transport reports the
+  # same condition for BR/EDR and for LE, and put the transport only in the
+  # human-readable title and message, which this path discards. Anything that
+  # needs to be distinguished downstream has to be a dimension, not prose. Keep
+  # the values low cardinality - they multiply the published time series.
   #
   # This is the only place the two services are invoked together: Pulse and
   # Stream Builder remain fully decoupled and never call each other.
@@ -352,11 +368,9 @@ module BlueHydra
     BlueHydra::Pulse.send_event(key, hash) if BlueHydra.pulse
 
     if BlueHydra.stream_builder || BlueHydra.stream_builder_debug
-      BlueHydra::StreamBuilder.send_event(
-        key,
-        1,
-        dimensions: [{ "name" => "severity", "value" => hash[:severity].to_s }]
-      )
+      dimensions = [{ "name" => "severity", "value" => hash[:severity].to_s }]
+      dimensions.concat(hash[:dimensions]) if hash[:dimensions]
+      BlueHydra::StreamBuilder.send_event(hash[:key] || key, 1, dimensions: dimensions)
     end
   end
 

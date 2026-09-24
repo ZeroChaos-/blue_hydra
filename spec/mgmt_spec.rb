@@ -797,6 +797,53 @@ describe "BlueHydra::Mgmt transport enablement" do
         )
       end
 
+      # BR/EDR and LE report under the SAME event key, and the notification path
+      # keeps only the key and the dimensions -- the title and message that name
+      # the transport are prose and get discarded. Without the dimension a
+      # consumer can tell a transport is unusable but not which one, which is the
+      # difference between "no Classic devices" and "no LE devices".
+      it "tags the notification with the transport that is unusable" do
+        serve(ok(controller_info(bredr_supported, powered_bredr)),
+              ok(controller_info(bredr_supported, powered_bredr)))
+        mgmt.ensure_transports_enabled
+
+        expect(BlueHydra).to have_received(:send_event).with(
+          'blue_hydra',
+          hash_including(dimensions: [{ "name" => "transport", "value" => "LE" }])
+        )
+      end
+
+      it "tags the disabled-transport notification with the transport too" do
+        serve(ok(controller_info(dart_supported, powered_bredr)),
+              reply(BlueHydra::Mgmt::STATUS_REJECTED),
+              ok(controller_info(dart_supported, powered_bredr)))
+        mgmt.ensure_transports_enabled
+
+        expect(BlueHydra).to have_received(:send_event).with(
+          'blue_hydra',
+          hash_including(key: 'blue_hydra_transport_disabled',
+                         dimensions: [{ "name" => "transport", "value" => "LE" }])
+        )
+      end
+
+      # The two notifications must be distinguishable by dimension alone, since
+      # that plus the key is all a metrics consumer gets.
+      it "tags each transport separately when neither is usable" do
+        powered_only = BlueHydra::Mgmt::SETTING_POWERED
+        serve(ok(controller_info(powered_only, powered_only)),
+              ok(controller_info(powered_only, powered_only)))
+        mgmt.ensure_transports_enabled
+
+        expect(BlueHydra).to have_received(:send_event).with(
+          'blue_hydra',
+          hash_including(dimensions: [{ "name" => "transport", "value" => "BREDR" }])
+        )
+        expect(BlueHydra).to have_received(:send_event).with(
+          'blue_hydra',
+          hash_including(dimensions: [{ "name" => "transport", "value" => "LE" }])
+        )
+      end
+
       # The ordinary success path: we found LE off, turned it on, and that is an
       # info line and nothing more. Notifying here would train people to ignore
       # the event.

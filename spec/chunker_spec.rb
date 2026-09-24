@@ -256,7 +256,7 @@ describe BlueHydra::Chunker do
         expect(zero_counter - before_zero).to eq(1)    # counted as a 0-address chunk
         expect(chunk_log).not_to have_received(:info)
         expect(BlueHydra.logger).to have_received(:warn).with(/no addresses/)
-        expect(BlueHydra).to have_received(:send_event).with('blue_hydra', hash_including(key: 'bluehydra_chunk_0_address'))
+        expect(BlueHydra).to have_received(:send_event).with('blue_hydra', hash_including(key: 'blue_hydra_chunk_0_address'))
       end
 
       it "chunk-logs and does not warn when chunker_debug is on" do
@@ -268,7 +268,7 @@ describe BlueHydra::Chunker do
         expect(zero_counter - before_zero).to eq(1)
         expect(chunk_log).to have_received(:info).at_least(:once)
         expect(BlueHydra.logger).not_to have_received(:warn)
-        expect(BlueHydra).to have_received(:send_event).with('blue_hydra', hash_including(key: 'bluehydra_chunk_0_address'))
+        expect(BlueHydra).to have_received(:send_event).with('blue_hydra', hash_including(key: 'blue_hydra_chunk_0_address'))
       end
     end
 
@@ -279,7 +279,7 @@ describe BlueHydra::Chunker do
 
         expect(pushed.size).to eq(1)                     # processed, not discarded
         expect(unique_counter - before_unique).to eq(0)  # NOT treated as multi-unique
-        expect(BlueHydra).not_to have_received(:send_event).with('blue_hydra', hash_including(key: 'bluehydra_chunk_2_address'))
+        expect(BlueHydra).not_to have_received(:send_event).with('blue_hydra', hash_including(key: 'blue_hydra_chunk_2_address'))
         expect(BlueHydra.logger).not_to have_received(:warn).with(/multiple address/)
       end
     end
@@ -295,7 +295,7 @@ describe BlueHydra::Chunker do
         expect(unique_counter - before_unique).to eq(1)         # and as multi-unique-address
         expect(chunk_log).not_to have_received(:info)           # chunk log only in debug
         expect(BlueHydra.logger).to have_received(:warn).with(/multiple address/)  # warn is unconditional
-        expect(BlueHydra).to have_received(:send_event).with('blue_hydra', hash_including(key: 'bluehydra_chunk_2_address'))
+        expect(BlueHydra).to have_received(:send_event).with('blue_hydra', hash_including(key: 'blue_hydra_chunk_2_address'))
       end
 
       it "counts, chunk-logs, warns and discards when chunker_debug is on" do
@@ -309,7 +309,7 @@ describe BlueHydra::Chunker do
         expect(unique_counter - before_unique).to eq(1)
         expect(chunk_log).to have_received(:info).at_least(:once)  # chunk-logged in debug
         expect(BlueHydra.logger).to have_received(:warn).with(/multiple address/)  # warn is unconditional
-        expect(BlueHydra).to have_received(:send_event).with('blue_hydra', hash_including(key: 'bluehydra_chunk_2_address'))
+        expect(BlueHydra).to have_received(:send_event).with('blue_hydra', hash_including(key: 'blue_hydra_chunk_2_address'))
       end
     end
 
@@ -334,7 +334,7 @@ describe BlueHydra::Chunker do
         joined = pushed.map { |c| c.flatten.join }
         expect(joined.any? { |c| c.include?("AA:AA:AA:AA:AA:AA") }).to eq(true)
         expect(joined.any? { |c| c.include?("BB:BB:BB:BB:BB:BB") }).to eq(true)
-        expect(BlueHydra).not_to have_received(:send_event).with('blue_hydra', hash_including(key: 'bluehydra_chunk_2_address'))
+        expect(BlueHydra).not_to have_received(:send_event).with('blue_hydra', hash_including(key: 'blue_hydra_chunk_2_address'))
       end
 
       it "recognizes the newly added address-bearing events as chunk starts" do
@@ -415,7 +415,7 @@ describe BlueHydra::Chunker do
         expect(joined.any? { |c| c.include?("23:65:33:17:33:03") }).to eq(true)
         expect(joined.any? { |c| c.include?("47:AB:0F:E7:0D:B2") }).to eq(true)
         expect(BlueHydra).not_to have_received(:send_event)
-          .with('blue_hydra', hash_including(key: 'bluehydra_chunk_2_address'))
+          .with('blue_hydra', hash_including(key: 'blue_hydra_chunk_2_address'))
       end
 
       it "no longer merges a same-device parameter request either" do
@@ -465,7 +465,7 @@ describe BlueHydra::Chunker do
         # multi-unique chunk
         expect(pushed.size).to eq(2)
         expect(unique_counter - before_unique).to eq(0)
-        expect(BlueHydra).not_to have_received(:send_event).with('blue_hydra', hash_including(key: 'bluehydra_chunk_2_address'))
+        expect(BlueHydra).not_to have_received(:send_event).with('blue_hydra', hash_including(key: 'blue_hydra_chunk_2_address'))
       end
     end
   end

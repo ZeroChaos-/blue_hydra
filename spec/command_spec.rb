@@ -45,6 +45,20 @@ describe BlueHydra::Command do
     expect(BlueHydra.logger).to have_received(:debug).with(/Timeout on command: sleep 10/)
     expect(result[:exit_code]).to be_nil # killed, so no exit status
   end
+
+  # Running out of memory is not recoverable here, so it notifies and exits
+  # rather than returning a result the caller would have to interpret.
+  it 'notifies and exits when the system cannot allocate memory for a command' do
+    allow(BlueHydra.logger).to receive(:fatal)
+    allow(BlueHydra).to receive(:send_event)
+    allow(Open3).to receive(:popen3).and_raise(Errno::ENOMEM)
+
+    expect { BlueHydra::Command.execute3("echo hi") }.to raise_error(SystemExit)
+
+    expect(BlueHydra).to have_received(:send_event).with(
+      'blue_hydra', hash_including(key: 'blue_hydra_oom', severity: 'FATAL')
+    )
+  end
 end
 
 # Runner#stop kills the discovery and ubertooth threads wherever they happen to

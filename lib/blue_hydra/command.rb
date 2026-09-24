@@ -70,7 +70,7 @@ module BlueHydra::Command
       BlueHydra.logger.fatal("System couldn't allocate enough memory to run an external command.")
       BlueHydra.send_event('blue_hydra',
       {
-        key: "bluehydra_oom",
+        key: "blue_hydra_oom",
         title: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
         message: "BlueHydra couldnt allocate enough memory to run external command. Sensor OOM.",
         severity: "FATAL"

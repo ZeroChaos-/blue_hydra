@@ -142,7 +142,7 @@ module BlueHydra
             end
             BlueHydra.send_event('blue_hydra',
             {
-              key: 'bluehydra_chunk_0_address',
+              key: 'blue_hydra_chunk_0_address',
               title: 'BlueHydra chunked a chunk with 0 addresses.',
               message: 'BlueHydra chunked a chunk with 0 addresses',
               severity: 'WARN'
@@ -156,7 +156,7 @@ module BlueHydra
             BlueHydra.logger.warn("Got a chunk with multiple addresss, missing a start block. Discarding corrupted data...")
             BlueHydra.send_event('blue_hydra',
             {
-              key: 'bluehydra_chunk_2_address',
+              key: 'blue_hydra_chunk_2_address',
               title: 'BlueHydra chunked a chunk with more than 1 uniq address.',
               message: 'BlueHydra chunked a chunk with more than 1 uniq address.',
               severity: 'WARN'

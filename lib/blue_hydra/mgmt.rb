@@ -960,11 +960,17 @@ module BlueHydra
       end
 
       BlueHydra.logger.warn("mgmt: #{message}")
+      # The transport goes in a dimension as well as the prose. Both transports
+      # report under the same event key, and the notification path keeps only the
+      # key and the dimensions - so without this, a downstream consumer can tell
+      # that a transport is unusable but not which one, which is the difference
+      # between "no Classic devices" and "no LE devices".
       BlueHydra.send_event('blue_hydra',
         {key: key,
         title: title,
         message: message,
-        severity: 'WARN'
+        severity: 'WARN',
+        dimensions: [{ "name" => "transport", "value" => label }]
         })
     end
 
