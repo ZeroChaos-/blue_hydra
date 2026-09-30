@@ -37,6 +37,7 @@ describe BlueHydra::Device do
       le_tx_power
       le_features
       le_features_bitmap
+      le_connectable
       le_ibeacon_measured_power
       ibeacon_range
       created_at
@@ -317,6 +318,79 @@ describe BlueHydra::Device, "sync payload shape" do
     d = device(address: "DE:AD:00:00:5C:04")
     expect(d.stream_builder_data(true)).not_to have_key(:created_at)
     expect(d.syncable_attributes).not_to include(:created_at)
+  end
+
+  # le_connectable is a scalar boolean among a column of Text attributes, so the
+  # three states have to stay distinguishable on the wire: true, an observed
+  # false, and never-observed. An observed false is the one at risk - it is
+  # falsey, so any "unless val" style filter would swallow it and make a
+  # non-connectable device indistinguishable from an unseen one.
+  it "sends le_connectable when it is true" do
+    d = device(address: "DE:AD:00:00:5C:05", le_connectable: true)
+    expect(d.stream_builder_data(true)[:le_connectable]).to eq(true)
+  end
+
+  it "sends le_connectable when it is an observed false" do
+    d = device(address: "DE:AD:00:00:5C:06", le_connectable: false)
+    data = d.stream_builder_data(true)
+    expect(data).to have_key(:le_connectable)
+    expect(data[:le_connectable]).to eq(false)
+  end
+
+  it "omits le_connectable when it has never been observed" do
+    d = device(address: "DE:AD:00:00:5C:07")
+    expect(d.le_connectable).to eq(nil)
+    expect(d.stream_builder_data(true)).not_to have_key(:le_connectable)
+  end
+
+  it "does not treat le_connectable as serialized" do
+    d = BlueHydra::Device.new
+    expect(d.is_serialized?(:le_connectable)).to eq(false)
+    expect(d.syncable_attributes).to include(:le_connectable)
+  end
+end
+
+# The parser emits one value per chunk, so a batch can carry both, and the column
+# holds the OR-reduction. The naive reduction is the one the normal-attribute loop
+# uses, .uniq.sort.first, which raises on booleans because they are not
+# Comparable.
+describe BlueHydra::Device, "le_connectable from a result batch" do
+  def result(connectable)
+    { address: ["DE:AD:00:00:5C:10"], le_connectable: connectable }
+  end
+
+  it "is true when any chunk in the batch said connectable" do
+    d = BlueHydra::Device.update_or_create_from_result(result([false, true, false]))
+    expect(d.le_connectable).to eq(true)
+  end
+
+  it "is false when every chunk said non-connectable" do
+    d = BlueHydra::Device.update_or_create_from_result(result([false, false]))
+    expect(d.le_connectable).to eq(false)
+  end
+
+  it "does not raise on a mixed batch" do
+    # booleans are not Comparable, so the .uniq.sort.first the normal-attribute
+    # loop applies would raise ArgumentError here
+    expect { BlueHydra::Device.update_or_create_from_result(result([true, false])) }
+      .not_to raise_error
+  end
+
+  # The runner reads result[:le_connectable] for ConnectTracker after calling
+  # this, so the caller's hash must come back intact. It does because the method
+  # dups before consuming - this pins that, since the deletes inside would
+  # otherwise reach the caller.
+  it "does not consume keys out of the caller's result hash" do
+    r = result([true])
+    BlueHydra::Device.update_or_create_from_result(r)
+    expect(r).to have_key(:le_connectable)
+    expect(r[:le_connectable]).to eq([true])
+    expect(r).to have_key(:address)
+  end
+
+  it "leaves le_connectable nil when the batch never mentions it" do
+    d = BlueHydra::Device.update_or_create_from_result({ address: ["DE:AD:00:00:5C:11"] })
+    expect(d.le_connectable).to eq(nil)
   end
 end
 

@@ -58,6 +58,18 @@ class BlueHydra::Device
   property :le_tx_power,                   Text
   property :le_features,                   Text
   property :le_features_bitmap,            Text
+  # Whether the advertisement said a connect to this device could succeed, taken
+  # from the Connectable bit of an extended advertising report's Props bitmask.
+  #
+  # Boolean rather than the Text most le_* columns use, because it is one bit off
+  # one bitmask and not an accumulated set - so it is deliberately absent from
+  # is_serialized? and from the "update array attributes" list.
+  #
+  # No default, unlike le_mode/classic_mode: nil means "no advertisement has
+  # carried a Props block yet", which is a different claim from an observed
+  # false. EMPTY_SYNC_VALUES drops nil but not false, so an unobserved device
+  # sends nothing while an observed non-connectable one sends false.
+  property :le_connectable,                Boolean
   # Distance estimate, derived from le_ibeacon_measured_power and the RSSI we
   # received. Deliberately NOT synced: it is a pure function of two values that
   # ARE synced, so anything downstream can derive it - and derive it better, from
@@ -260,6 +272,18 @@ class BlueHydra::Device
       record.ibeacon_range = result.delete(:ibeacon_range).last
     end
 
+    # le_connectable fits neither list above. The normal-attribute loop reduces
+    # with .uniq.sort.first, and booleans are not Comparable - a batch carrying
+    # both values raises "comparison of TrueClass with false failed". The array
+    # loop hands the whole array to the setter, which is wrong for a scalar
+    # Boolean column.
+    #
+    # So: OR-reduce. "Advertised connectable at least once in this batch" is also
+    # the reading that matches how the runner feeds ConnectTracker.
+    unless result[:le_connectable].nil?
+      record.le_connectable = result[:le_connectable].any?
+    end
+
     # this is probably a band-aie, likely devices have multiple company type elements
     #update flappy company_type
     if result[:company_type]
@@ -361,7 +385,8 @@ class BlueHydra::Device
       :le_random_address_type, :le_tx_power, :last_seen, :classic_tx_power,
       :le_features, :classic_features, :le_service_uuids,
       :classic_service_uuids, :classic_channels, :classic_class, :classic_rssi,
-      :le_flags, :le_rssi, :le_company_uuid, :le_ibeacon_measured_power
+      :le_flags, :le_rssi, :le_company_uuid, :le_ibeacon_measured_power,
+      :le_connectable
     ]
   end
 

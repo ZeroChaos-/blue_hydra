@@ -1848,10 +1848,15 @@ module BlueHydra
                 #
                 # Done for every result rather than only the ones we are about to
                 # scan, so the observation still accumulates while a device sits
-                # inside its info_scan_rate cooldown. le_connectable is policy
-                # rather than device data, so it is deliberately not a Device
-                # attribute - the model's allowlists ignore it, and it is read
-                # straight off the result here in the result thread.
+                # inside its info_scan_rate cooldown.
+                #
+                # This reads the raw per-chunk values, which is why it is not
+                # replaced by device.le_connectable: the column holds the
+                # OR-reduction of the batch, while ConnectTracker wants each
+                # observation as it came.
+                #
+                # Safe to read after the update because update_or_create_from_result
+                # dups the hash before consuming keys out of it.
                 if result[:le_connectable]
                   result[:le_connectable].uniq.each do |connectable|
                     BlueHydra::ConnectTracker.record_connectable(device.address, connectable)
