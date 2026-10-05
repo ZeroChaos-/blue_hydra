@@ -175,6 +175,27 @@ describe BlueHydra::Device do
     expect(parsed).to_not include("0x01")
   end
 
+  # The setter read classic_class instead of classic_channels, which a single
+  # assignment to a fresh Device cannot see: classic_class is nil, so the
+  # wrong read yields [] and looks correct. It takes a second assignment to
+  # show channels are not carried forward, and a populated classic_class to
+  # show its values leaking in.
+  it "carries previously seen classic_channels forward across assignments" do
+    d = BlueHydra::Device.new
+    d.classic_channels = ["Ch1"]
+    d.classic_channels = ["Ch2"]
+    expect(JSON.parse(d.classic_channels)).to include("Ch1", "Ch2")
+  end
+
+  it "does not leak classic_class values into classic_channels" do
+    d = BlueHydra::Device.new
+    d.classic_class = [["Phone", "Audio"]]
+    d.classic_channels = ["Ch1"]
+    parsed = JSON.parse(d.classic_channels)
+    expect(parsed).to eq(["Ch1"])
+    expect(parsed).to_not include("Phone", "Audio")
+  end
+
   it "merges classic_class, dropping hex entries" do
     d = BlueHydra::Device.new
     d.classic_class = [["0xdeadbeef", "Phone", "Audio"]]

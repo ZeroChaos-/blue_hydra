@@ -597,7 +597,7 @@ class BlueHydra::Device
   #     new channels
   def classic_channels=(channels)
     new = channels.map{|x| x.split(", ").reject{|x| x =~ /^0x/}}.flatten.sort.uniq
-    current = JSON.parse(self.classic_class || '[]')
+    current = JSON.parse(self.classic_channels || '[]')
     self[:classic_channels] = JSON.generate((new + current).uniq)
   end
 
