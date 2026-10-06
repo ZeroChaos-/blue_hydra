@@ -53,6 +53,14 @@ module BlueHydra
     # wherever it comes from.
     TX_POWER_UNAVAILABLE = 127
 
+    # A received signal reading as btmon prints it, "-56 dBm (0xc8)", reduced to
+    # its first two words. When the controller could not take a reading btmon
+    # prints "invalid (0x7f)" or "invalid (0x99)" in its place
+    # (bluez monitor/packet.c, packet_print_rssi). That is not a reading, and
+    # anything that reads the value as a number with to_i would see 0 dBm: the
+    # strongest signal possible rather than none.
+    RSSI_RE = /\A-?\d+ dBm\z/.freeze
+
     attr_accessor :attributes
 
     # initializer which takes an Array of chunks to be parsed
@@ -590,10 +598,13 @@ module BlueHydra
       # so the value was always still nil at this point. See set_ibeacon_range,
       # which runs once the whole chunk has been read.
       when line =~ /^RSSI:/
-        set_attr("#{bt_mode}_rssi".to_sym, {
-          t: timestamp.split(': ')[1].to_i,
-          rssi: line.split(': ')[1].split(' ')[0,2].join(' ')
-        })
+        rssi = line.split(': ')[1].to_s.split(' ')[0,2].join(' ')
+        if rssi =~ RSSI_RE
+          set_attr("#{bt_mode}_rssi".to_sym, {
+            t: timestamp.split(': ')[1].to_i,
+            rssi: rssi
+          })
+        end
 
 
       else

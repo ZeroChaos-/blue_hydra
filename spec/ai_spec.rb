@@ -2536,3 +2536,83 @@ describe "BlueHydra::Runner failed-connect retry cadence" do
     expect(runner.info_scan_queue).to be_empty
   end
 end
+
+#############################################################################
+# RSSI: only real readings are recorded
+#############################################################################
+# When the controller could not take a reading, btmon prints "RSSI: invalid
+# (0x7f)" or "RSSI: invalid (0x99)" instead of a value. Anything that reads a
+# recorded "invalid" as a number with to_i gets 0 dBm, the strongest signal
+# there is.
+describe "BlueHydra::Parser RSSI readings" do
+  def parse(lines)
+    chunk = lines + ["last_seen: 1500000000"]
+    p = BlueHydra::Parser.new([chunk])
+    p.parse
+    p.attributes
+  end
+
+  def le_report(*data_lines)
+    [
+      "> HCI Event: LE Meta Event (0x3e) plen 1",
+      "      LE Extended Advertising Report (0x0d)",
+      "        Address: AA:BB:CC:DD:EE:FF (OUI)"
+    ] + data_lines
+  end
+
+  def classic_inquiry(*data_lines)
+    [
+      "> HCI Event: Extended Inquiry Result (0x2f) plen 255",
+      "        Address: 00:11:22:33:44:55 (OUI 00-11-22)"
+    ] + data_lines
+  end
+
+  it "records a real LE reading" do
+    attrs = parse(le_report("        RSSI: -56 dBm (0xc8)"))
+    expect(attrs[:le_rssi].map { |r| r[:rssi] }).to eq(["-56 dBm"])
+  end
+
+  it "records a real Classic reading" do
+    attrs = parse(classic_inquiry("        RSSI: -71 dBm (0xb9)"))
+    expect(attrs[:classic_rssi].map { |r| r[:rssi] }).to eq(["-71 dBm"])
+  end
+
+  it "drops an LE reading btmon reports as invalid (0x7f)" do
+    attrs = parse(le_report("        RSSI: invalid (0x7f)"))
+    expect(attrs[:le_rssi]).to be_nil
+  end
+
+  it "drops a Classic reading btmon reports as invalid (0x99)" do
+    attrs = parse(classic_inquiry("        RSSI: invalid (0x99)"))
+    expect(attrs[:classic_rssi]).to be_nil
+  end
+
+  it "drops an RSSI line with no value" do
+    attrs = parse(le_report("        RSSI:"))
+    expect(attrs[:le_rssi]).to be_nil
+  end
+
+  it "keeps the real reading when an invalid one shares the chunk" do
+    attrs = parse(le_report(
+      "        RSSI: invalid (0x7f)",
+      "        Name (complete): Widget",
+      "        RSSI: -48 dBm (0xd0)"
+    ))
+    expect(attrs[:le_rssi].map { |r| r[:rssi] }).to eq(["-48 dBm"])
+  end
+
+  # The iBeacon range is computed from the last reading in the chunk, so an
+  # invalid one would otherwise put the beacon 0.0 metres away.
+  it "does not estimate an iBeacon range from an invalid reading" do
+    attrs = parse(le_report(
+      "        RSSI: invalid (0x7f)",
+      "        Company: Apple, Inc. (76)",
+      "          Type: iBeacon (2)",
+      "          UUID: 7988f2b6-dc41-1291-8746-ecf83cc7a06c",
+      "          Version: 15104.61591",
+      "          TX power: -59 dB"
+    ))
+    expect(attrs[:le_rssi]).to be_nil
+    expect(attrs[:ibeacon_range]).to be_nil
+  end
+end
