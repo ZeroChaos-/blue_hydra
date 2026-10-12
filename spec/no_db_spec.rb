@@ -162,10 +162,15 @@ describe "bin/blue_hydra flags applied before require 'blue_hydra'" do
       # lib's own top level called exit, inside bin's `require 'blue_hydra'`
       frames = report["exit"]["frames"]
       expect(frames.first).to match([a_string_ending_with("lib/blue_hydra.rb"), "Kernel#exit"])
-      expect(frames).to include(
-        [a_string_ending_with("lib/blue_hydra.rb"), "<top (required)>"],
-        [a_string_ending_with("bin/blue_hydra"), a_string_ending_with("require")]
-      )
+      # Under `bundle exec` Bundler wraps Kernel#require (bundled_gems.rb
+      # replace_require), so the require frames are in bundled_gems.rb and bin's
+      # only frame is <main>. So match on order: a bin frame outside (after)
+      # lib's top-level frame.
+      lib_top = frames.index { |path, label| path.end_with?("lib/blue_hydra.rb") && label == "<top (required)>" }
+      bin_top = frames.index { |path, _label| path.end_with?("bin/blue_hydra") }
+      expect(lib_top).not_to be_nil, "no lib/blue_hydra.rb <top (required)> frame in #{frames.inspect}"
+      expect(bin_top).not_to be_nil, "no bin/blue_hydra frame in #{frames.inspect}"
+      expect(bin_top).to be > lib_top, "bin/blue_hydra frame is not outside lib's top level in #{frames.inspect}"
 
       sends = report["events"].select { |e| e["event"] == "BlueHydra.send_event" }
       expect(sends.size).to eq(1)
