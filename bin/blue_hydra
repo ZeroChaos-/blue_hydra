@@ -15,6 +15,9 @@ require 'optparse'
 # configurations
 options = {}
 
+# Four of these (--pulse, --stream-builder, --stream-builder-debug, --no-db)
+# must take effect before `require 'blue_hydra'`; the seed block just above
+# that require applies them and explains why.
 OptionParser.new do |opts|
   opts.on("-d", "--daemonize", "Suppress output and run in daemon mode") do |v|
     options[:daemonize] = true
@@ -34,7 +37,6 @@ OptionParser.new do |opts|
   opts.on("--stream-builder-debug", "Store Stream Builder results in a file for review") do |v|
     options[:stream_builder_debug] = true
   end
-  # This gets parsed directly and is not available as BlueHydra.db
   opts.on("--no-db", "Keep db in ram only") do |v|
     options[:no_db] = true
   end
@@ -62,6 +64,18 @@ unless Process.uid == 0
   exit 1
 end
 
+# lib/blue_hydra.rb chooses the database (on-disk file or sqlite::memory:)
+# while it is being required, so --no-db has to be in place before the require
+# below or it is silently ignored. The same goes for --pulse, --stream-builder
+# and --stream-builder-debug: the require can send an event and exit (e.g. when
+# the adapter's MAC can't be read), and BlueHydra.send_event drops it unless
+# those flags are already set. The setters are themselves defined by that
+# require, so seed the class variables their getters (`@@x ||= false`) read.
+module BlueHydra; end
+BlueHydra.class_variable_set(:@@no_db, options[:no_db] ? true : false)
+BlueHydra.class_variable_set(:@@pulse, options[:pulse] ? true : false)
+BlueHydra.class_variable_set(:@@stream_builder, options[:stream_builder] ? true : false)
+BlueHydra.class_variable_set(:@@stream_builder_debug, options[:stream_builder_debug] ? true : false)
 
 # require the actual Blue Hydra code from lib
 require 'blue_hydra'
@@ -81,35 +95,10 @@ else
   BlueHydra.demo_mode = false
 end
 
-# If the pulse flag is set the service will attempt to send results to
-# PwnPulse.  This defaults to false and can be ignored unless the system
-# running Blue Hydra is a Pwnie Express sensor.
-if options[:pulse]
-  BlueHydra.pulse = true
-else
-  BlueHydra.pulse = false
-end
-
 if options[:pulse_debug]
   BlueHydra.pulse_debug = true
 else
   BlueHydra.pulse_debug = false
-end
-
-# If the stream-builder flag is set the service will attempt to send device
-# data to the local Stream Builder ingestor and metrics to CloudWatch via
-# Greengrass.  This defaults to false and is used when running as part of the
-# Anemoi container platform.
-if options[:stream_builder]
-  BlueHydra.stream_builder = true
-else
-  BlueHydra.stream_builder = false
-end
-
-if options[:stream_builder_debug]
-  BlueHydra.stream_builder_debug = true
-else
-  BlueHydra.stream_builder_debug = false
 end
 
 # If the optional Stream Builder files are not installed we fall back to a
@@ -119,12 +108,6 @@ if (BlueHydra.stream_builder || BlueHydra.stream_builder_debug) && !BlueHydra::S
   msg = "Stream Builder was requested but support is not installed on this build; continuing without it"
   BlueHydra.logger.warn(msg)
   puts msg unless BlueHydra.daemon_mode
-end
-
-if options[:no_db]
-  BlueHydra.no_db = true
-else
-  BlueHydra.no_db = false
 end
 
 if options[:signal_spitter] || BlueHydra.config["signal_spitter"]

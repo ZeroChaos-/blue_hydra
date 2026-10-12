@@ -1125,8 +1125,16 @@ module BlueHydra
       "hci#{@index}"
     end
 
-    # Attempt to clear an rfkill (soft) block via bin/rfkill-reset. The script
-    # prints nothing on success, so any output is treated as failure.
+    # Power-cycle the adapter (rfkill block, then unblock), or clear a soft
+    # block, via bin/rfkill-reset. The script prints nothing on success, so any
+    # output is treated as failure.
+    #
+    # TODO: replace bin/rfkill-reset with a Ruby implementation that writes
+    # rfkill_event block/unblock records to /dev/rfkill for the device's index,
+    # which would remove the dependency below. The shell-out needs /bin/sh, the
+    # rfkill binary and the script path to all exist in the runtime image; if
+    # any is missing execute3 raises Errno::ENOENT and the discovery loop
+    # crashes instead of recovering.
     def rfkill_recover
       command = "#{File.expand_path('../../../bin/rfkill-reset', __FILE__)} #{device}"
       output  = BlueHydra::Command.execute3(command, RFKILL_RESET_TIMEOUT)[:stdout] # no output == success
