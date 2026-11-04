@@ -5,12 +5,12 @@ describe BlueHydra::Chunker do
     yep1 = ["> HCI Event: Connect Complete (0x03) plen 11         2015-12-10 11:30:24.387882\r\n",
             "        Status: Page Timeout (0x04)\r\n",
             "        Handle: 65535\r\n",
-            "        Address: D6:87:40:44:B1:4F (OUI D6-87-40)\r\n",
+            "        Address: C2:00:00:00:00:36 (OUI C2-00-00)\r\n",
             "        Link type: ACL (0x01)\r\n",
             "        Encryption: Disabled (0x00)\r\n"]
     yep2 = ["> HCI Event: Role Change (0x12) plen 8               2015-12-10 11:31:08.667931\r\n",
             "        Status: Success (0x00)\r\n",
-            "        Address: 8C:2D:AA:7F:58:8C (Apple)\r\n",
+            "        Address: 02:00:09:00:00:33 (OUI 02-00-09)\r\n",
             "        Role: Slave (0x01)\r\n"]
     yep3 = ["> HCI Event: LE Meta Event (0x3e) plen 19            2015-12-10 11:30:58.880870\r\n",
              "      LE Connection Complete (0x01)\r\n",
@@ -18,14 +18,14 @@ describe BlueHydra::Chunker do
              "        Handle: 3585\r\n",
              "        Role: Master (0x00)\r\n",
              "        Peer address type: Public (0x00)\r\n",
-             "        Peer address: 80:EA:CA:68:02:C1 (Dialog Semiconductor Hellas SA)\r\n",
+             "        Peer address: 02:00:11:00:00:37 (OUI 02-00-11)\r\n",
              "        Connection interval: 18.75 msec (0x000f)\r\n",
              "        Connection latency: 0.00 msec (0x0000)\r\n",
              "        Supervision timeout: 32000 msec (0x0c80)\r\n",
              "        Master clock accuracy: 0x00\r\n"]
 
     nope1 = ["Bluetooth monitor ver 5.35\r\n"]
-    nope2 = ["= New Index: 5C:C5:D4:11:33:79 (BR/EDR,USB,hci1)     2015-12-10 11:29:46.064195\r\n"]
+    nope2 = ["= New Index: 02:00:12:00:00:38 (BR/EDR,USB,hci1)     2015-12-10 11:29:46.064195\r\n"]
     # Encryption Change (0x08) is address-bearing but not a chunk-start code.
     # (Disconnect Complete 0x05 and then Max Slots Change 0x1b were both here
     # before and are now starts - see Chunker::HCI_EVENT_START_CODES.)
@@ -83,11 +83,11 @@ describe BlueHydra::Chunker do
     header_ts = "2015-12-10 11:31:08.667931"
     msg1 = ["> HCI Event: Role Change (0x12) plen 8               #{header_ts}\r\n",
             "        Status: Success (0x00)\r\n",
-            "        Address: 8C:2D:AA:7F:58:8C (Apple)\r\n"]
+            "        Address: 02:00:09:00:00:33 (OUI 02-00-09)\r\n"]
     # a second starting chunk is what causes msg1's working set to be flushed
     msg2 = ["> HCI Event: Role Change (0x12) plen 8               2015-12-10 11:32:00.123456\r\n",
             "        Status: Success (0x00)\r\n",
-            "        Address: 8C:2D:AA:7F:58:8C (Apple)\r\n"]
+            "        Address: 02:00:09:00:00:33 (OUI 02-00-09)\r\n"]
 
     incoming = Queue.new
     outgoing = Queue.new
@@ -405,15 +405,15 @@ describe BlueHydra::Chunker do
       it "does not discard an advertising report because another device renegotiates" do
         before_count  = counter
         before_unique = unique_counter
-        pushed = flush_chunk([inquiry("23:65:33:17:33:03"),
-                              le_remote_conn_param_request("47:AB:0F:E7:0D:B2")])
+        pushed = flush_chunk([inquiry("02:00:10:00:00:35"),
+                              le_remote_conn_param_request("42:00:00:00:00:34")])
 
         expect(pushed.size).to eq(2)
         expect(unique_counter - before_unique).to eq(0) # nothing discarded
         expect(counter - before_count).to eq(0)
         joined = pushed.map { |c| c.flatten.join }
-        expect(joined.any? { |c| c.include?("23:65:33:17:33:03") }).to eq(true)
-        expect(joined.any? { |c| c.include?("47:AB:0F:E7:0D:B2") }).to eq(true)
+        expect(joined.any? { |c| c.include?("02:00:10:00:00:35") }).to eq(true)
+        expect(joined.any? { |c| c.include?("42:00:00:00:00:34") }).to eq(true)
         expect(BlueHydra).not_to have_received(:send_event)
           .with('blue_hydra', hash_including(key: 'blue_hydra_chunk_2_address'))
       end

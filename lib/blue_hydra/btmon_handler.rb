@@ -30,7 +30,7 @@ module BlueHydra
     # SMP) rather than hex-dumping them, and the decoded field names collide with
     # the parser's device attributes. An L2CAP Information Response carries:
     #
-    #   > BR-ACL: Handle 256 [04:70:56:7F:EC:E9 (Arcadyan)] flags 0x02 dlen 16
+    #   > BR-ACL: Handle 256 [02:00:13:00:00:39 (OUI 02-00-13)] flags 0x02 dlen 16
     #         L2CAP: Information Response (0x0b) ident 1 len 8
     #           Features: 0x000000b8
     #             Enhanced Retransmission Mode

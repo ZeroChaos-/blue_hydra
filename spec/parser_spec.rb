@@ -85,7 +85,7 @@ describe BlueHydra::Parser do
     chunk = [[
       "> HCI Event: Read Remote Version Complete (0x0c) plen 8   #5 2026-07-31 14:00:00.000000",
       "        Status: Success (0x00)",
-      "        Handle: 256 Address: B0:D5:FB:98:FE:21 (Google, Inc.)",
+      "        Handle: 256 Address: 02:00:08:00:00:32 (OUI 02-00-08)",
       "        LMP version: Bluetooth 6.0 (0x0e) - Subversion 16904 (0x4208)",
       "        Manufacturer: Broadcom Corporation (15)",
       "last_seen: 1785521070"
@@ -94,7 +94,7 @@ describe BlueHydra::Parser do
     p = BlueHydra::Parser.new(chunk)
     p.parse
 
-    expect(p.attributes[:address]).to eq(["B0:D5:FB:98:FE:21"])
+    expect(p.attributes[:address]).to eq(["02:00:08:00:00:32"])
     expect(p.attributes[:lmp_version]).to eq(["Bluetooth 6.0 (0x0e) - Subversion 16904 (0x4208)"])
     expect(p.attributes[:classic_handle]).to eq(["256"]) # handle without the "Address" suffix
 
@@ -114,7 +114,7 @@ describe BlueHydra::Parser do
     chunk = [[
       "> HCI Event: Disconnect Complete (0x05) plen 4   #190 2026-07-31 14:04:45.235779",
       "        Status: Success (0x00)",
-      "        Handle: 2049 Address: F4:40:D1:9D:5A:63 (Static)",
+      "        Handle: 2049 Address: C2:00:00:00:00:18 (Static)",
       "        Reason: Connection Failed to be Established (0x3e)",
       "last_seen: 1785521085"
     ]]
@@ -122,7 +122,7 @@ describe BlueHydra::Parser do
     p = BlueHydra::Parser.new(chunk)
     p.parse
 
-    expect(p.attributes[:address]).to eq(["F4:40:D1:9D:5A:63"])
+    expect(p.attributes[:address]).to eq(["C2:00:00:00:00:18"])
     expect(p.attributes[:last_seen]).to eq([1785521085])
     expect(p.attributes[:classic_mode]).to be_nil
     expect(p.attributes[:le_mode]).to be_nil
@@ -137,7 +137,7 @@ describe "BlueHydra::Parser failed remote-version reads" do
     [[
       "> HCI Event: Read Remote Version Complete (0x0c) plen 8",
       "        Status: #{status}",
-      "        Handle: 2048 (LE-ACL) Address: EC:81:93:14:EC:07 (Logitech, Inc)",
+      "        Handle: 2048 (LE-ACL) Address: 02:00:07:00:00:31 (OUI 02-00-07)",
       "        LMP version: #{status =~ /Success/ ? 'Bluetooth 5.0 (0x09) - Subversion 22 (0x0016)' : 'Reserved (0xff) - Subversion 65535 (0xffff)'}",
       "        Manufacturer: #{status =~ /Success/ ? 'Broadcom Corporation (15)' : 'Ericsson Technology Licensing (65535)'}",
       "last_seen: 1449747024"
@@ -148,7 +148,7 @@ describe "BlueHydra::Parser failed remote-version reads" do
     parser = BlueHydra::Parser.new(version_chunk("Success (0x00)"))
     parser.parse
     expect(parser.attributes[:lmp_version].first).to eq("Bluetooth 5.0 (0x09) - Subversion 22 (0x0016)")
-    expect(parser.attributes[:address].first).to eq("EC:81:93:14:EC:07")
+    expect(parser.attributes[:address].first).to eq("02:00:07:00:00:31")
   end
 
   it "ignores the version when the read failed" do
@@ -157,7 +157,7 @@ describe "BlueHydra::Parser failed remote-version reads" do
     expect(parser.attributes[:lmp_version]).to be_nil
     expect(parser.attributes[:manufacturer]).to be_nil
     # the address is still good - only the payload the failure invalidates is dropped
-    expect(parser.attributes[:address].first).to eq("EC:81:93:14:EC:07")
+    expect(parser.attributes[:address].first).to eq("02:00:07:00:00:31")
   end
 
   it "does not suppress payloads on unrelated events that carry a status" do
@@ -166,12 +166,12 @@ describe "BlueHydra::Parser failed remote-version reads" do
       "> HCI Event: LE Meta Event (0x3e) plen 19",
       "        LE Connection Complete (0x01)",
       "        Status: Unknown Connection Identifier (0x02)",
-      "        Address: EC:81:93:14:EC:07 (Logitech, Inc)",
+      "        Address: 02:00:07:00:00:31 (OUI 02-00-07)",
       "last_seen: 1449747024"
     ]]
     parser = BlueHydra::Parser.new(chunk)
     parser.parse
-    expect(parser.attributes[:address].first).to eq("EC:81:93:14:EC:07")
+    expect(parser.attributes[:address].first).to eq("02:00:07:00:00:31")
   end
 end
 

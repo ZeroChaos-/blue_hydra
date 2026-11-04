@@ -769,7 +769,7 @@ describe "BlueHydra::Parser TX power sources" do
   it "keeps only the real value when the sentinel arrives alongside it" do
     attrs = parse(le_report(
       "        TX power: 127 dBm",
-      "        Name (complete): 84C8D48AFC5E4102",
+      "        Name (complete): DEVICE-A00000001",
       "        TX power: 3 dBm"
     ))
     expect(attrs[:le_tx_power]).to eq(["3 dBm"])

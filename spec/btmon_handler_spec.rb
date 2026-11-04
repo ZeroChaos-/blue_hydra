@@ -79,7 +79,7 @@ describe BlueHydra::BtmonHandler do
     # See BtmonHandler::ACL_DATA_RE.
     it "drops connection payload (ACL/SCO/ISO data) messages" do
       l2cap_info_response = [
-        "> BR-ACL: Handle 256 [04:70:56:7F:EC:E9 (Arcadyan)] flags 0x02 dlen 16\r\n",
+        "> BR-ACL: Handle 256 [02:00:13:00:00:39 (OUI 02-00-13)] flags 0x02 dlen 16\r\n",
         "      L2CAP: Information Response (0x0b) ident 1 len 8\r\n",
         "        Features: 0x000000b8\r\n",
         "          Enhanced Retransmission Mode\r\n",
