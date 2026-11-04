@@ -87,6 +87,65 @@ class BlueHydra::Device
   # the half of the distance calculation the cloud could not otherwise get.
   property :le_ibeacon_measured_power,     String
 
+  # GATT, populated only by Walk results on LE devices (see BlueHydra::GattWalker).
+  # Text throughout: identity values may be 512 chars decoded / 1,024 hex chars,
+  # over the 255 String default, and the two lists are JSON. Never written from
+  # advertisement results and never overwriting name/appearance/manufacturer/firmware.
+  #
+  # The two lists carry an explicit length because dm-validations infers a
+  # validates_length_of from a Text's default length of 65,535, and valid? would
+  # then refuse the lists Requirement 11.13 says must store: gatt_characteristics
+  # runs to the 262,144-byte cap, and 1,000 service UUIDs with the longest Nordic
+  # names run to some 95,000 characters. The cap is the bound for both; the
+  # column type in SQLite is TEXT either way.
+  property :gatt_service_uuids,     Text, length: BlueHydra::GattCharacteristics::MAX_BYTES   # JSON array of Uuid_Formatter strings, merged union, ordered by 128-bit value
+  property :gatt_characteristics,   Text, length: BlueHydra::GattCharacteristics::MAX_BYTES   # JSON array of entry objects (GattCharacteristics schema), ordered by value_handle
+  property :gatt_database_hash,     Text   # 32 lowercase hex chars
+  property :gatt_device_name,       Text
+  property :gatt_appearance,        Text   # "0xNNNN"
+  property :gatt_manufacturer_name, Text
+  property :gatt_model_number,      Text
+  property :gatt_serial_number,     Text
+  property :gatt_firmware_revision, Text
+  property :gatt_hardware_revision, Text
+  property :gatt_software_revision, Text
+  property :gatt_system_id,         Text   # 16 lowercase hex chars
+  property :gatt_pnp_id,            Text   # "0xSS 0xVVVV 0xPPPP 0xRRRR"
+
+  # Every Gatt_Columns entry: the allowlist a Walk result may write, and what
+  # update_or_create_from_result, syncable_attributes and is_serialized? draw on
+  # below. The two JSON lists, the Database Hash, then the ten identity strings.
+  GATT_COLUMNS = %i[gatt_service_uuids gatt_characteristics gatt_database_hash gatt_device_name
+                    gatt_appearance gatt_manufacturer_name gatt_model_number gatt_serial_number
+                    gatt_firmware_revision gatt_hardware_revision gatt_software_revision
+                    gatt_system_id gatt_pnp_id].freeze
+
+  # Walk result identity key (a GattWalker::IDENTITY_SET value, the key under
+  # which the Walk reports that characteristic's decoded value) => the column
+  # holding it. One column per Identity_Set characteristic, Database Hash
+  # included: the Walk reports a read 0x2B2A both here and as the result's
+  # top-level database_hash.
+  GATT_IDENTITY_COLUMNS = {
+    device_name:       :gatt_device_name,
+    appearance:        :gatt_appearance,
+    manufacturer_name: :gatt_manufacturer_name,
+    model_number:      :gatt_model_number,
+    serial_number:     :gatt_serial_number,
+    firmware_revision: :gatt_firmware_revision,
+    hardware_revision: :gatt_hardware_revision,
+    software_revision: :gatt_software_revision,
+    system_id:         :gatt_system_id,
+    pnp_id:            :gatt_pnp_id,
+    database_hash:     :gatt_database_hash
+  }.freeze
+
+  # The identity keys are the walker's, so a key renamed or added on one side
+  # only would silently leave a column unwritten. Fail at load instead.
+  unless GATT_IDENTITY_COLUMNS.keys.sort == BlueHydra::GattWalker::IDENTITY_SET.values.sort
+    raise "GATT_IDENTITY_COLUMNS keys #{GATT_IDENTITY_COLUMNS.keys.inspect} do not match " \
+          "GattWalker::IDENTITY_SET values #{BlueHydra::GattWalker::IDENTITY_SET.values.inspect}"
+  end
+
   property :created_at,                    DateTime
   property :updated_at,                    DateTime
   property :last_seen,                     Integer
@@ -194,6 +253,10 @@ class BlueHydra::Device
   def self.mark_offline(device)
     device.status = 'offline'
     BlueHydra::ConnectTracker.forget(device.address)
+    # Drops the Resume_State only (Requirement 17.8); the Finished_Walk record
+    # stays so a device that comes back inside info_scan_rate is still
+    # rate-limited to a hash check or a skip rather than a full re-walk.
+    BlueHydra::GattTracker.forget(device.address)
   end
 
   # this class method is take a result Hash and convert it into a new or update
@@ -201,8 +264,13 @@ class BlueHydra::Device
   #
   # == Parameters :
   #   result ::
-  #     Hash of results from parser
+  #     Hash of results from parser, or a Walk result from GattScanner#walk_result
   def self.update_or_create_from_result(result)
+    # A Walk result travels on the same result_queue as parser output but is
+    # a different shape (its address is a String, the parser's an Array) and
+    # may only update a record that already exists, so it takes its own path
+    # before anything below reads the hash.
+    return apply_gatt_result(result) if result[:gatt_walk]
 
     result = result.dup
 
@@ -241,13 +309,20 @@ class BlueHydra::Device
     end
 
     # update normal attributes
-    %w{
+    #
+    # The eleven scalar Gatt_Columns (GATT_IDENTITY_COLUMNS.values) are accepted
+    # here as single-valued attributes like name or manufacturer, which makes
+    # them part of the result-key allowlist (Requirement 11.3). Nothing feeds
+    # them through this loop today: the parser's advertisement results carry no
+    # gatt_* key, and a Walk result reports its identity values under its own
+    # keys (identity, database_hash; see GattWalker), not under column names.
+    (%w{
       address name manufacturer short_name lmp_version firmware
       classic_major_class classic_minor_class le_tx_power classic_tx_power
       le_address_type company appearance
       le_random_address_type le_company_uuid le_company_data le_proximity_uuid
       le_major_num le_minor_num classic_mode le_mode le_ibeacon_measured_power
-    }.map(&:to_sym).each do |attr|
+    }.map(&:to_sym) + GATT_IDENTITY_COLUMNS.values).each do |attr|
       if result[attr]
         # we should only get a single value for these so we need to warn if
         # we are getting multiple values for these keys.. it should NOT be...
@@ -295,9 +370,14 @@ class BlueHydra::Device
     end
 
     # update array attributes
+    #
+    # The two list Gatt_Columns sit here because their setters below take the
+    # whole Array and store it as JSON, like le_service_uuids. Same as above,
+    # no result reaches this loop with these keys today.
     %w{
       classic_features le_features le_flags classic_channels classic_class le_rssi
       classic_rssi le_service_uuids classic_service_uuids le_features_bitmap classic_features_bitmap
+      gatt_service_uuids gatt_characteristics
     }.map(&:to_sym).each do |attr|
       if result[attr]
         record.send("#{attr.to_s}=", result.delete(attr))
@@ -318,6 +398,192 @@ class BlueHydra::Device
 
     record
   end
+
+  # Apply a Walk result (the hash GattScanner#walk_result builds, tagged
+  # gatt_walk: true) to the Device record with its address, writing the
+  # Gatt_Columns, status and last_seen and nothing else. Returns the record, or
+  # nil when no record has the address. Reached through
+  # update_or_create_from_result on the Result_Thread, which is therefore the
+  # only writer of Gatt_Columns (Requirement 11.2).
+  #
+  # == Which record
+  #
+  # The one whose address equals the result's, compared case-insensitively,
+  # and no other. The Walk ran over a Link to this address, so the
+  # advertisement that got it connected already made its record; without one
+  # the result is logged at debug and dropped. There is no UAP/LAP fallback
+  # and no record is created (Requirement 11.14): an LE private address
+  # shares its lower octets with nothing in particular, and a record made
+  # here would carry none of the advertisement data every other record has.
+  #
+  # == What changes
+  #
+  # status becomes online and last_seen the later of its stored value and the
+  # Walk's end (11.4). name, appearance, manufacturer, firmware, lmp_version
+  # and every classic_* and le_* column are not touched: the GATT identity
+  # values go to their own gatt_* columns (11.4).
+  #
+  # gatt_service_uuids becomes the ordered, de-duplicated union of the stored
+  # list and the result's service UUIDs (11.5), cut to MAX_ENTRIES with one
+  # warning naming the address, the column and the count dropped (11.17). A
+  # result adding no UUID leaves the text byte-identical (12.7).
+  #
+  # gatt_characteristics, by Walk_Outcome, after the Database Hash rule below
+  # has or has not cleared the stored list:
+  #
+  #   complete                  replaced by the result's list (11.6)
+  #   partial, non-empty list   replaced (11.7): the Walk reached the database
+  #                             end, so its list is the whole structure less
+  #                             what it could not read
+  #   timeout, disconnected     merged by value handle, the result's entry
+  #                             winning and no stored entry dropped (11.8,
+  #                             17.4), so resumed Walks accumulate
+  #   protected, empty partial  left as it is (11.16)
+  #
+  # A replaced or merged list is trimmed to the caps before it is stored, raw_hex
+  # largest-first and then whole entries from the top handle down, with one
+  # warning naming the address, the bytes before and after, the raw_hex fields
+  # removed and the entries dropped, only when something was (11.18, 11.19).
+  #
+  # == Database Hash (11.9, 17.6)
+  #
+  # gatt_database_hash is the hash the stored gatt_characteristics were built
+  # for, written whenever a result carries one. The stored list is cleared,
+  # before the outcome rule above runs, when either
+  #
+  #   * the result's hash_changed is true: the Walk's hash check read a hash
+  #     other than the one the Gatt_Tracker had recorded and walked the
+  #     changed database from scratch (17.6), or
+  #   * the result carries a hash, the record holds one, and they differ: a
+  #     Walk with no hash check read a hash other than the stored list's. That
+  #     is every address's first Walk after a restart, the Gatt_Tracker being
+  #     in memory, and a hash check whose read was unavailable, which walks in
+  #     full with hash_changed false.
+  #
+  # Nothing is cleared while either hash is missing. A result without one
+  # proves no change: hash_changed false means the check did not run or
+  # could not read, not that the hashes matched. A stored list without one
+  # was built by Walks that had not reached the hash yet, and a resumed Walk
+  # that reaches it continues that structure rather than contradicting it.
+  # The clear applies whatever the outcome, protected and empty partial
+  # included: the list is for a database that no longer exists.
+  # gatt_service_uuids is never cleared; the union keeps accumulating.
+  #
+  # == Identity columns (11.12, 11.15)
+  #
+  # result[:identity] holds, under GATT_IDENTITY_COLUMNS' keys, each Identity_Set
+  # value the Walk read that is non-empty and well-formed (GattWalker#identity_values
+  # leaves out malformed and empty values, and reads that were protected or
+  # not made have no entry). Each key present overwrites its column, each key
+  # absent leaves its column; the check for an empty value is repeated here
+  # because the rule is this method's (11.15). gatt_database_hash also takes
+  # result[:database_hash], which a hash check reads without a characteristic
+  # entry to carry it into identity.
+  #
+  # == Sync (12.3, 12.4, 12.7)
+  #
+  # Every column is assigned through its setter, so DataMapper's dirty tracking
+  # (prepare_the_filth, before save) puts in the filthy set exactly the columns
+  # whose stored value changed. A list that serialises to the text already
+  # stored, an identity value equal to the stored one, or a status already
+  # online is not dirty and Sync does not ship it.
+  #
+  # == Parameters :
+  #   result ::
+  #     Hash from GattScanner#walk_result; see the Walk result hash in the design
+  def self.apply_gatt_result(result)
+    address = result[:address]
+    outcome = result[:outcome]
+    unless BlueHydra::GattScanner::OUTCOMES_WITH_RESULT.include?(outcome)
+      raise ArgumentError, "gatt: #{address} Walk result has outcome #{outcome.inspect}, not one of " \
+                           "#{BlueHydra::GattScanner::OUTCOMES_WITH_RESULT.join(', ')}"
+    end
+
+    record = self.first(conditions: ["lower(address) = ?", address.downcase])
+    if record.nil?
+      BlueHydra.logger.debug("gatt: #{address} has no Device record, Walk result discarded")
+      return nil
+    end
+
+    record.status    = "online"
+    record.last_seen = [record.last_seen.to_i, result[:ended_at]].max
+
+    stored_uuids = stored_gatt_list(record, :gatt_service_uuids) do |text|
+      list = JSON.parse(text)
+      raise ArgumentError, "#{list.class} is not an Array" unless list.is_a?(Array)
+      list
+    end
+    uuids, dropped = BlueHydra::GattCharacteristics.union_service_uuids(stored_uuids, result[:service_uuids])
+    if dropped > 0
+      BlueHydra.logger.warn("gatt: #{address} gatt_service_uuids over " \
+                            "#{BlueHydra::GattCharacteristics::MAX_ENTRIES} entries: #{dropped} dropped")
+    end
+    record.gatt_service_uuids = uuids
+
+    new_hash    = result[:database_hash]
+    stored_hash = record.gatt_database_hash
+    cleared     = result[:hash_changed] == true || (!new_hash.nil? && !stored_hash.nil? && new_hash != stored_hash)
+    stored      = []
+    unless cleared
+      stored = stored_gatt_list(record, :gatt_characteristics) { |text| BlueHydra::GattCharacteristics.parse(text) }
+    end
+    incoming = result[:characteristics]
+
+    entries =
+      case outcome
+      when :complete then incoming
+      when :partial  then incoming.empty? ? nil : incoming
+      when *BlueHydra::GattWalker::INTERRUPTED_OUTCOMES
+        BlueHydra::GattCharacteristics.merge_by_value_handle(stored, incoming)
+      else nil # protected
+      end
+
+    if entries
+      entries, stats = BlueHydra::GattCharacteristics.fit_to_caps(entries)
+      if stats[:raw_hex_removed] > 0 || stats[:entries_dropped] > 0
+        BlueHydra.logger.warn("gatt: #{address} gatt_characteristics over cap: " \
+                              "#{stats[:bytes_before]} -> #{stats[:bytes_after]} bytes, " \
+                              "#{stats[:raw_hex_removed]} raw_hex removed, #{stats[:entries_dropped]} entries dropped")
+      end
+      record.gatt_characteristics = entries
+    elsif cleared
+      record.gatt_characteristics = []
+    end
+
+    (result[:identity] || {}).each do |key, value|
+      next if value.nil? || value.empty?
+      record.send("#{GATT_IDENTITY_COLUMNS.fetch(key)}=", value)
+    end
+    record.gatt_database_hash = new_hash if new_hash
+
+    if record.valid?
+      record.save
+    else
+      BlueHydra.logger.warn("#{address} can not save.")
+      record.errors.keys.each do |key|
+        BlueHydra.logger.warn("#{key.to_s}: #{record.errors[key].inspect} (#{record[key]})")
+      end
+    end
+
+    record
+  end
+
+  # The parsed value of one of the two list Gatt_Columns, the block doing the
+  # parsing; [] for a column never written. A stored text the block refuses,
+  # not JSON or entries outside GattCharacteristics' schema, which a column
+  # written by another version of this code or a damaged row can hold, is
+  # logged at warn and treated as empty, so the result being applied replaces
+  # it. The alternative, raising, would end the Result_Thread on every result
+  # for that address and leave every other device unprocessed too.
+  def self.stored_gatt_list(record, column)
+    text = record[column]
+    return [] if text.nil? || text.empty?
+    yield text
+  rescue JSON::ParserError, ArgumentError => e
+    BlueHydra.logger.warn("gatt: #{record.address} stored #{column} unreadable, treated as empty: #{e.message}")
+    []
+  end
+  private_class_method :stored_gatt_list
 
   # look up the vendor for the address in the Louis gem
   # and set it
@@ -386,7 +652,10 @@ class BlueHydra::Device
       :le_features, :classic_features, :le_service_uuids,
       :classic_service_uuids, :classic_channels, :classic_class, :classic_rssi,
       :le_flags, :le_rssi, :le_company_uuid, :le_ibeacon_measured_power,
-      :le_connectable
+      :le_connectable,
+      # every Gatt_Columns entry ships in the data object under its column name
+      # (Requirement 12.1), change-gated like the rest
+      *GATT_COLUMNS
     ]
   end
 
@@ -402,6 +671,10 @@ class BlueHydra::Device
   #
   # They are the only hash-backed members. That matters for EMPTY_SYNC_VALUES,
   # which has to know about "{}" as well as "[]".
+  #
+  # The two list Gatt_Columns are array-backed JSON and ship parsed, an array of
+  # strings and an array of entry objects (Requirement 12.2). The other eleven
+  # Gatt_Columns are plain strings and are deliberately not here.
   def is_serialized?(attr)
     [
       :classic_channels,
@@ -414,7 +687,9 @@ class BlueHydra::Device
       :le_service_uuids,
       :classic_service_uuids,
       :classic_rssi,
-      :le_rssi
+      :le_rssi,
+      :gatt_service_uuids,
+      :gatt_characteristics
     ].include?(attr)
   end
 
@@ -699,6 +974,37 @@ class BlueHydra::Device
     self[:classic_service_uuids] = JSON.generate(new.uniq)
   end
 
+  # Store a list of Uuid_Formatter strings as the :gatt_service_uuids JSON text.
+  #
+  # Unlike le_service_uuids= this does not merge: which entries the column ends
+  # up holding (the ordered, de-duplicated, capped union of Requirements 11.5
+  # and 11.17) is decided by the caller with GattCharacteristics.union_service_uuids,
+  # and this stores exactly what it is given. A Text column given an Array
+  # directly would store Array#to_s, which is not JSON.
+  #
+  # == Parameters
+  #   uuids ::
+  #     Array of "Name (uuid)" strings
+  def gatt_service_uuids=(uuids)
+    self[:gatt_service_uuids] = JSON.generate(uuids)
+  end
+
+  # Store a list of characteristic entries as the :gatt_characteristics JSON
+  # text in its canonical form: GattCharacteristics' key order, ascending
+  # value_handle (Requirements 11.10, 11.11), so equal lists always produce
+  # byte-identical text and the filthy-attribute gate sees no change for them.
+  #
+  # Does not merge, for the same reason as gatt_service_uuids=: replace, merge by
+  # value handle or leave alone depends on the Walk outcome and is the caller's
+  # decision. Raises ArgumentError for an entry outside the schema rather than
+  # storing text that parse would later refuse.
+  #
+  # == Parameters
+  #   entries ::
+  #     Array of entry Hashes in GattCharacteristics' in-memory form
+  def gatt_characteristics=(entries)
+    self[:gatt_characteristics] = BlueHydra::GattCharacteristics.serialize(entries)
+  end
 
   # set the :classic_rss attribute by merging with previously seen values
   #
