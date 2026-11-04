@@ -100,6 +100,64 @@ describe BlueHydra::Mgmt do
       expect(mgmt.set_powered(true)).to eq(BlueHydra::Mgmt::STATUS_SUCCESS)
     end
 
+    # Powering off drops every Link, so set_powered(false) empties the link-up
+    # set link_up? answers from (see the link-up tracking block below for how
+    # the reader thread fills it). It does so in an ensure: a stale entry would
+    # let a Walk connect its ATT bearer with no Link up, which asks the kernel to
+    # create a new connection, so a refused or failed power-off must clear too.
+    describe "set_powered and the link-up set" do
+      # Seed the set the way the reader thread does: a Device Connected event
+      # (6 byte LE address + address_type + flags) through dispatch_event.
+      def link_up(mac)
+        params = BlueHydra::Mgmt.pack_address(mac) + "\x01".b + ("\x00" * 8).b
+        mgmt.send(:dispatch_event, BlueHydra::Mgmt::EV_DEVICE_CONNECTED, params)
+      end
+
+      it "set_powered(false) clears every link-up entry" do
+        link_up("AA:BB:CC:DD:EE:FF")
+        link_up("11:22:33:44:55:66")
+        serve(status: BlueHydra::Mgmt::STATUS_SUCCESS)
+
+        expect(mgmt.set_powered(false)).to eq(BlueHydra::Mgmt::STATUS_SUCCESS)
+        expect(mgmt.link_up?("AA:BB:CC:DD:EE:FF")).to be_nil
+        expect(mgmt.link_up?("11:22:33:44:55:66")).to be_nil
+        expect(mgmt.instance_variable_get(:@link_up)).to be_empty
+
+        @kernel_thread.join(2)
+        expect(@received.first[:opcode]).to eq(BlueHydra::Mgmt::CMD_SET_POWERED)
+        expect(@received.first[:params].bytes).to eq([0x00])
+      end
+
+      it "set_powered(false) clears the set even when the kernel refuses the power-off" do
+        link_up("AA:BB:CC:DD:EE:FF")
+        # REJECTED is the kernel's catch-all refusal and not a not-ready status,
+        # so it comes back as a plain unsuccessful result
+        serve(status: BlueHydra::Mgmt::STATUS_REJECTED)
+
+        expect(mgmt.set_powered(false)).to eq(BlueHydra::Mgmt::STATUS_REJECTED)
+        expect(mgmt.link_up?("AA:BB:CC:DD:EE:FF")).to be_nil
+      end
+
+      it "set_powered(false) clears the set even when the command raises" do
+        link_up("AA:BB:CC:DD:EE:FF")
+        allow(mgmt).to receive(:open_socket).and_return(ours)
+        allow(mgmt).to receive(:send_command).and_raise(IOError.new("closed stream"))
+        allow(BlueHydra).to receive(:send_event)
+
+        expect { mgmt.set_powered(false) }.to raise_error(MgmtSocketError)
+        expect(mgmt.link_up?("AA:BB:CC:DD:EE:FF")).to be_nil
+      end
+
+      it "set_powered(true) leaves the link-up set alone" do
+        link_up("AA:BB:CC:DD:EE:FF")
+        connected_at = mgmt.link_up?("AA:BB:CC:DD:EE:FF")
+        serve(status: BlueHydra::Mgmt::STATUS_SUCCESS)
+
+        expect(mgmt.set_powered(true)).to eq(BlueHydra::Mgmt::STATUS_SUCCESS)
+        expect(mgmt.link_up?("AA:BB:CC:DD:EE:FF")).to eq(connected_at)
+      end
+    end
+
     it "add_device sends Add Device with packed address, type and auto-connect action" do
       serve(status: BlueHydra::Mgmt::STATUS_SUCCESS)
 
@@ -327,6 +385,230 @@ describe BlueHydra::Mgmt do
       allow(mgmt).to receive(:send_command)
       expect { dispatch(BlueHydra::Mgmt::EV_PIN_CODE_REQUEST, "\x01\x02".b) }.not_to raise_error
       expect(mgmt).not_to have_received(:send_command)
+    end
+
+    # The same events also maintain the set of Links the kernel reports up,
+    # which Walk threads read through link_up? immediately before connecting an
+    # ATT bearer: an L2CAP connect with no Link up does not fail, it creates a
+    # new LE connection. The value is the CLOCK_MONOTONIC time the reader thread
+    # saw Device Connected, which the walker reports as its handoff lag.
+    describe "link-up tracking (dispatch_event -> link_up?)" do
+      def monotonic
+        Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      end
+
+      it "answers nil for an address with no Device Connected seen" do
+        expect(mgmt.link_up?("AA:BB:CC:DD:EE:FF")).to be_nil
+      end
+
+      it "Device Connected sets the address to the monotonic time the event was seen" do
+        before = monotonic
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+        after = monotonic
+
+        connected_at = mgmt.link_up?("AA:BB:CC:DD:EE:FF")
+        expect(connected_at).to be_a(Float)
+        expect(connected_at).to be_between(before, after)
+      end
+
+      it "matches a lowercase query against the uppercase address the event decoded to" do
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+        expect(mgmt.link_up?("aa:bb:cc:dd:ee:ff")).to eq(mgmt.link_up?("AA:BB:CC:DD:EE:FF"))
+        expect(mgmt.link_up?("aa:bb:cc:dd:ee:ff")).to be_a(Float)
+      end
+
+      it "a repeat Device Connected refreshes the connect time" do
+        allow(Process).to receive(:clock_gettime).and_call_original
+        allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC).and_return(100.0, 250.0)
+
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+        expect(mgmt.link_up?("AA:BB:CC:DD:EE:FF")).to eq(100.0)
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+        expect(mgmt.link_up?("AA:BB:CC:DD:EE:FF")).to eq(250.0)
+      end
+
+      it "Device Disconnected clears the address" do
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_DISCONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+        expect(mgmt.link_up?("AA:BB:CC:DD:EE:FF")).to be_nil
+      end
+
+      it "Connect Failed clears the address" do
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+        dispatch(BlueHydra::Mgmt::EV_CONNECT_FAILED, conn_params("AA:BB:CC:DD:EE:FF"))
+        expect(mgmt.link_up?("AA:BB:CC:DD:EE:FF")).to be_nil
+      end
+
+      it "Device Disconnected for one address leaves another's entry" do
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("11:22:33:44:55:66"))
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_DISCONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+
+        expect(mgmt.link_up?("AA:BB:CC:DD:EE:FF")).to be_nil
+        expect(mgmt.link_up?("11:22:33:44:55:66")).to be_a(Float)
+      end
+
+      it "an undecodable (too-short) Device Connected sets nothing and queues nothing" do
+        expect { dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, "\x01\x02".b) }.not_to raise_error
+        expect(mgmt.instance_variable_get(:@link_up)).to be_empty
+        expect(mgmt.connection_events.empty?).to be true
+      end
+
+      it "still queues Device Connected as {type: :connected, address:} with the Link recorded" do
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+
+        expect(mgmt.connection_events.pop).to eq(type: :connected, address: "AA:BB:CC:DD:EE:FF")
+        expect(mgmt.link_up?("AA:BB:CC:DD:EE:FF")).to be_a(Float)
+      end
+
+      # The discovery thread drains :connected and hands the address to a Walk,
+      # so the set must already answer at the moment the event is pushed, not
+      # merely by the time dispatch_event returns.
+      it "records the Link before the Device Connected event is pushed" do
+        seen_at_push = :not_pushed
+        allow(mgmt.connection_events).to receive(:<<).and_wrap_original do |original, event|
+          seen_at_push = mgmt.link_up?(event[:address])
+          original.call(event)
+        end
+
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+
+        expect(seen_at_push).to be_a(Float)
+        expect(mgmt.connection_events.pop).to eq(type: :connected, address: "AA:BB:CC:DD:EE:FF")
+      end
+    end
+
+    # Device Connected also fires the on_device_connected callback the Runner
+    # installs for the GATT handoff (Requirement 2.1). It runs on the reader
+    # thread straight from dispatch_event, which is the point: the discovery
+    # thread that drains connection_events can sit for seconds inside a
+    # synchronous Add Device, longer than an unheld LE Link survives.
+    describe "on_device_connected callback (dispatch_event -> Runner handoff)" do
+      let(:calls) { [] }
+
+      def drain(queue)
+        events = []
+        events << queue.pop(true) until queue.empty?
+        events
+      end
+
+      it "is invoked once per Device Connected with the parsed (uppercase) address" do
+        mgmt.on_device_connected = ->(address) { calls << address }
+
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("aa:bb:cc:dd:ee:ff"))
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("11:22:33:44:55:66"))
+
+        expect(calls).to eq(["AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"])
+      end
+
+      it "is not invoked for Device Disconnected or Connect Failed, which still queue" do
+        mgmt.on_device_connected = ->(address) { calls << address }
+
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_DISCONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+        dispatch(BlueHydra::Mgmt::EV_CONNECT_FAILED, conn_params("11:22:33:44:55:66"))
+
+        expect(calls).to be_empty
+        expect(drain(mgmt.connection_events)).to eq([
+          { type: :disconnected, address: "AA:BB:CC:DD:EE:FF" },
+          { type: :failed,       address: "11:22:33:44:55:66" }
+        ])
+      end
+
+      it "is not invoked for an undecodable (too-short) Device Connected" do
+        mgmt.on_device_connected = ->(address) { calls << address }
+
+        expect { dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, "\x01\x02".b) }.not_to raise_error
+
+        expect(calls).to be_empty
+        expect(mgmt.connection_events.empty?).to be true
+      end
+
+      # Ordering is what lets the Runner's callback and the discovery thread be
+      # independent: by the time the callback runs, the Link is recorded and the
+      # :connected event is already on the queue, so nothing the callback does
+      # can stop the discovery thread from marking the entry connected.
+      it "is invoked after the Link is recorded and the event is pushed onto connection_events" do
+        order = []
+        allow(mgmt.connection_events).to receive(:<<).and_wrap_original do |original, event|
+          order << :pushed
+          original.call(event)
+        end
+        seen_by_callback = nil
+        mgmt.on_device_connected = lambda do |address|
+          order << :callback
+          seen_by_callback = {
+            queued:  mgmt.connection_events.size,
+            link_up: mgmt.link_up?(address)
+          }
+        end
+
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+
+        expect(order).to eq([:pushed, :callback])
+        expect(seen_by_callback[:queued]).to eq(1)
+        expect(seen_by_callback[:link_up]).to be_a(Float)
+        expect(mgmt.connection_events.pop).to eq(type: :connected, address: "AA:BB:CC:DD:EE:FF")
+      end
+
+      # Requirement 2.8: a raising handoff is one error line. The reader keeps
+      # dispatching, the Device Connected it was told about stays queued for the
+      # discovery thread, and the Link stays recorded.
+      it "logs a raising callback at error level and keeps the event queued and the reader dispatching" do
+        allow(BlueHydra.logger).to receive(:error)
+        mgmt.on_device_connected = lambda do |address|
+          calls << address
+          raise RuntimeError, "scanner boom"
+        end
+
+        expect { dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("AA:BB:CC:DD:EE:FF")) }
+          .not_to raise_error
+        expect(BlueHydra.logger).to have_received(:error)
+          .with("mgmt: on_device_connected callback for AA:BB:CC:DD:EE:FF raised RuntimeError: scanner boom")
+
+        # the next events still dispatch, and the callback is still invoked
+        expect { dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("11:22:33:44:55:66")) }
+          .not_to raise_error
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_DISCONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+
+        expect(calls).to eq(["AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"])
+        expect(BlueHydra.logger).to have_received(:error).twice
+        expect(drain(mgmt.connection_events)).to eq([
+          { type: :connected,    address: "AA:BB:CC:DD:EE:FF" },
+          { type: :connected,    address: "11:22:33:44:55:66" },
+          { type: :disconnected, address: "AA:BB:CC:DD:EE:FF" }
+        ])
+        expect(mgmt.link_up?("AA:BB:CC:DD:EE:FF")).to be_nil
+        expect(mgmt.link_up?("11:22:33:44:55:66")).to be_a(Float)
+      end
+
+      # Requirement 2.13: with gatt_scan off the Runner installs nothing, and
+      # connection-event handling is the pre-feature behaviour.
+      it "defaults to nil and, nil, is a no-op that leaves event handling unchanged" do
+        allow(BlueHydra.logger).to receive(:error)
+        expect(mgmt.instance_variable_get(:@on_device_connected)).to be_nil
+
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_DISCONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+        dispatch(BlueHydra::Mgmt::EV_CONNECT_FAILED, conn_params("11:22:33:44:55:66"))
+
+        expect(drain(mgmt.connection_events)).to eq([
+          { type: :connected,    address: "AA:BB:CC:DD:EE:FF" },
+          { type: :disconnected, address: "AA:BB:CC:DD:EE:FF" },
+          { type: :failed,       address: "11:22:33:44:55:66" }
+        ])
+        expect(mgmt.link_up?("AA:BB:CC:DD:EE:FF")).to be_nil
+        expect(BlueHydra.logger).not_to have_received(:error)
+      end
+
+      it "can be uninstalled by assigning nil" do
+        mgmt.on_device_connected = ->(address) { calls << address }
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("AA:BB:CC:DD:EE:FF"))
+        mgmt.on_device_connected = nil
+        dispatch(BlueHydra::Mgmt::EV_DEVICE_CONNECTED, conn_params("11:22:33:44:55:66"))
+
+        expect(calls).to eq(["AA:BB:CC:DD:EE:FF"])
+        expect(mgmt.connection_events.size).to eq(2)
+      end
     end
   end
 

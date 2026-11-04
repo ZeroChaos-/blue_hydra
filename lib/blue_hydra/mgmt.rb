@@ -270,6 +270,18 @@ module BlueHydra
       @enabled_discovery_type  = nil
       @enabled_transport_names = nil
       @connection_events      = Queue.new
+      # Links the kernel currently reports up: uppercase MAC (as parse_address
+      # renders it, the same string connection_events carries) => monotonic
+      # time the reader thread saw Device Connected. Written by the reader
+      # thread and set_powered(false), read by Walk threads through link_up?,
+      # so every access is under @link_mutex. Held only for the hash operation,
+      # never across I/O, so the reader thread cannot block on it.
+      @link_mutex             = Mutex.new
+      @link_up                = {}
+      # Device Connected callback, see on_device_connected=. nil until the
+      # Runner installs one (it only does so with gatt_scan on), and nil leaves
+      # connection-event handling exactly as it was before the GATT feature.
+      @on_device_connected    = nil
       @discovery_address_type = nil
       # Discovery is the default resting state. This flag, when set, tells the
       # reader thread NOT to re-arm discovery (a deliberate connect window);
@@ -308,6 +320,27 @@ module BlueHydra
 
     attr_reader :rearm_count, :rearm_skipped_count, :rearm_watchdog_count,
                 :rearm_ok_count, :rearm_failed_count
+
+    # A callable taking one argument, the uppercase address string, that
+    # dispatch_event invokes on every Device Connected event, after the Link is
+    # recorded and the event is on connection_events. The Runner installs its
+    # GATT handoff here so an auto-connected Link reaches the scanner straight
+    # off the reader thread: the discovery thread that drains connection_events
+    # can be blocked for seconds inside a synchronous mgmt command (an Add Device
+    # the kernel serialised behind an in-flight LE connect was measured at 4.5 s
+    # on device), which is longer than the 2 s HCI_DISCONN_TIMEOUT an unheld LE
+    # Link survives.
+    #
+    # The callback runs ON THE READER THREAD, so it must not block and must not
+    # issue a mgmt command (see reader_loop: the reader delivers command replies,
+    # so waiting on one here deadlocks). The Runner's does one mutex-guarded
+    # hash lookup and GattScanner#handoff, which spawns a thread; no I/O.
+    # Whatever it raises is caught in dispatch_event and logged, never
+    # propagated, and the event it was told about is already queued.
+    #
+    # Readable so the Runner specs can confirm what was installed: a Proc
+    # with gatt_scan on, nil with it off (Requirement 2.13).
+    attr_accessor :on_device_connected
 
     # True when the controller is currently discovering, per the kernel's own
     # Discovering events rather than what we last asked for.
@@ -497,8 +530,36 @@ module BlueHydra
     end
 
     # Power the controller on/off via mgmt Set Powered. Returns status byte.
+    #
+    # Powering off drops every Link, and the kernel is not relied on to report a
+    # Device Disconnected for each one, so the link-up set is emptied here. In
+    # an ensure, after the command: a Device Connected the reader thread records
+    # while the power-off is in flight is dropped too, and a refused or failed
+    # power-off still clears it. A wrongly cleared entry costs one Walk a
+    # `disconnected` outcome; a stale one would let a Walk connect with no Link
+    # up, which asks the kernel to create one (see link_up?).
     def set_powered(powered)
       status_of(exec_command(CMD_SET_POWERED, [powered ? 0x01 : 0x00].pack("C")))
+    ensure
+      @link_mutex.synchronize { @link_up.clear } unless powered
+    end
+
+    # Monotonic time (Process::CLOCK_MONOTONIC, the clock GattWalker measures
+    # with) at which the reader thread saw mgmt Device Connected for +address+,
+    # or nil when no Link to it is up: never connected, Device Disconnected or
+    # Connect Failed since, or the controller powered off since.
+    #
+    # The Gatt_Walker asks this immediately before connecting its ATT bearer,
+    # because a connect with no Link up does not fail, it creates a new LE
+    # connection (l2cap_chan_connect -> hci_connect_le_scan), and it reports
+    # its own clock minus this time as the handoff lag.
+    #
+    # Accurate to one reader-thread iteration: a Link that dropped but whose
+    # Device Disconnected is still unread reads as up. +address+ is matched
+    # case-insensitively against the uppercase form parse_address produces.
+    def link_up?(address)
+      key = address.to_s.upcase
+      @link_mutex.synchronize { @link_up[key] }
     end
 
     # Add a device to the controller's auto-connect list (mgmt Add Device).
@@ -862,7 +923,15 @@ module BlueHydra
       when EV_DEVICE_CONNECTED, EV_DEVICE_DISCONNECTED, EV_CONNECT_FAILED
         address = self.class.parse_address(params.b[0, 6])
         return unless address # drop undecodable events without disrupting the reader
+        # Before the push, so that by the time the discovery thread drains a
+        # :connected event and hands the address to a Walk, link_up? already
+        # answers for it. Keyed by address alone, like connection_events.
+        record_link_state(event, address)
         @connection_events << { type: connection_event_type(event), address: address }
+        # After the push: the callback hands the Link to the GATT scanner, and
+        # the discovery thread must find the :connected event queued regardless
+        # of what the callback does (or raises).
+        notify_device_connected(address) if event == EV_DEVICE_CONNECTED
       when EV_PIN_CODE_REQUEST
         reject_pairing(CMD_PIN_CODE_NEG_REPLY, params)
       when EV_USER_CONFIRM_REQUEST
@@ -884,6 +953,30 @@ module BlueHydra
       send_command(neg_reply_opcode, addr_info)
     rescue => e
       BlueHydra.logger.error("mgmt: failed to reject pairing request: #{e.message}")
+    end
+
+    # Invoke the on_device_connected callback, if one is installed, with the
+    # address a Device Connected event decoded to. Only this event: Disconnected
+    # and Connect Failed never reach it. Its own rescue, separate from the
+    # reader_loop's, so a raising callback is one error line and the reader goes
+    # on dispatching the next event as if nothing happened.
+    def notify_device_connected(address)
+      callback = @on_device_connected
+      return unless callback
+      callback.call(address)
+    rescue => e
+      BlueHydra.logger.error("mgmt: on_device_connected callback for #{address} raised #{e.class}: #{e.message}")
+    end
+
+    # Keep the link-up set (see link_up?) in step with one connection-lifecycle
+    # event. Runs on the reader thread: the mutex guards a hash operation only.
+    def record_link_state(event, address)
+      if event == EV_DEVICE_CONNECTED
+        now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        @link_mutex.synchronize { @link_up[address] = now }
+      else # Device Disconnected, Connect Failed
+        @link_mutex.synchronize { @link_up.delete(address) }
+      end
     end
 
     # Map a connection-lifecycle event code to its symbol.
