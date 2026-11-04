@@ -157,20 +157,147 @@ Open items
 --------------------------------------------------------------------------------
 6. Implement GATT service scanning
 --------------------------------------------------------------------------------
-- Goal: for LE devices, after connecting (mgmt auto-connect path), walk the GATT
-  database - primary services, characteristics, descriptors - to enrich device
-  fingerprints beyond advertising data + LMP version/features.
-- Sketch: over the ATT L2CAP channel (fixed CID 0x0004), issue ATT Read By Group
-  Type (primary services), Read By Type (characteristics), Find Information
-  (descriptors); collect UUIDs and map well-known 16-bit UUIDs (ties into the
-  assigned-16-bit-UUID lookup note up top). Small ATT client on an L2CAP socket
-  (own class, reuse the socket-lifecycle patterns; not on Mgmt).
-- Coordination: connects LE devices, so it must cooperate with the SCAN/CONNECT
-  phasing (connect during a CONNECT window / discovery off) and respect the
-  discovery-off budget - a full GATT walk may exceed a version read, so scope how
-  much of the DB to fetch per connection / spread across connections.
-- Storage: choose which GATT attributes to persist (new Device fields); all
-  writes in the result thread (DB rule). Validate on a known GATT peripheral.
+- Landed (2026-10, the validated build ran on-device 2026-10-29, then the
+  follow-up fix series; spec kept in the developer's workspace, outside this
+  repo). After each LE auto-connect the Link is handed to a read-only ATT
+  client that walks the GATT database over L2CAP CID 0x0004 and stores what it
+  learns on the Device. No pairing, no bonding, no writes: the bearer never
+  sets BT_SECURITY, and the only opcodes ever sent are Exchange MTU Request,
+  Read By Group Type, Read By Type, Find Information, Read, Read Blob and the
+  three server replies (Error Response, Exchange MTU Response, Handle Value
+  Confirmation). A Security_Error on a value read records the attribute as
+  protected and the Walk moves on.
+- Components (lib/blue_hydra/):
+  * GattConfig (gatt_config.rb): normalises the four options; one warning per
+    rejected value, default applied, startup never aborted.
+  * AttCodec (att_codec.rb): ATT PDU encode/decode; decode never raises.
+  * AttServer (att_server.rb): answers peer requests arriving on our bearer
+    with 0x01 / 0x03 / 0x1E only (Error Response, MTU Response, Confirmation).
+  * GattWalker (gatt_walker.rb) with Bearer (L2CAP socket lifecycle, each
+    kernel-dependent line cites its kernel function), WalkState (outstanding
+    procedures + reads, Marshal-copied for resume) and Plan (full /
+    hash_check / resume): discovery, Database Hash check, value reads, peer
+    handling, Walk_Bound timeouts (every wait <= min(remaining, 30 s)).
+  * GattScanner (gatt_scanner.rb): handoff (no I/O on the caller's thread),
+    one thread per Walk up to gatt_walk_parallel, the counters, result
+    delivery to result_queue, wait_for_idle for the Reset_Deferral,
+    stopping! / shutdown.
+  * GattTracker (gatt_tracker.rb): in-memory, address-keyed finish records
+    (pruned at info_scan_rate) and Resume_State, forget-before-store guard;
+    forgotten from Device.mark_offline beside ConnectTracker. No DB access.
+  * ValueDecoder (value_decoder.rb): identity strings, Appearance (0xNNNN),
+    System ID, PnP ID, Database Hash; 0x2904 Presentation Format integers
+    with units as 16-bit UUIDs; otherwise utf8 or hex, raw_hex kept whenever a
+    decode was applied.
+  * UuidNames (uuid_names.rb) over the vendored Nordic bluetooth-numbers-
+    database (data/bluetooth-numbers-database/, BSD-3, pinned commit and
+    sha256s in SOURCE.md); a UUID Nordic does not list renders as
+    "Unknown (<uuid>)" and counts name-unknown.
+  * GattCharacteristics (gatt_characteristics.rb): merge by value handle,
+    service UUID union (ordered, de-duplicated, capped at 1,000), the
+    262,144-byte / 1,000-entry caps (raw_hex removed largest-first, then
+    entries dropped from the top handle down, each trim logged once).
+- Integration: Mgmt tracks link_up on its reader thread and fires the
+  on_device_connected callback there; the Runner's Auto_Connect_Mirror
+  (address -> mgmt LE address type, written by add_to_auto_connect) answers
+  that callback and hands off without waiting for the discovery thread.
+  LeConnect hands off direct-connect Links before hold_link and classifies
+  EMLINK as conn_limit (counted, no ConnectTracker strike). hci_reset runs the
+  Reset_Deferral (wait_for_idle, capped at gatt_walk_timeout) before Set
+  Powered off; Runner#stop calls stopping! then shutdown before the shutdown
+  reset. The result thread dispatches gatt_walk results to
+  Device.apply_gatt_result, the only writer of the Gatt_Columns; Walk traffic
+  never touches raw_queue or chunk_queue. The debug CUI gained a GATT line and
+  conn-limit on the Direct LE line. The CUI NAME cell falls back complete name
+  > GATT Device Name > short name, tracked per row by :name_source
+  (CliUserInterfaceTracker.apply_gatt_device_name). A Walk's Device Name
+  travels over GattScanner#cui_name_queue (nil with the CUI inactive) and the
+  parser thread drains it after each chunk (Runner#drain_cui_names), so it
+  lands on that device's next chunk. The parser thread is the sole writer of
+  cui_status, expiry included (Runner#prune_cui_status, at most once per
+  60 s, cutoff CliUserInterface::CUI_TIMEOUT = 300); CliUserInterface#cui_status
+  is a whole-Hash, whole-row dup snapshot with expired rows filtered out and
+  :_seen computed on the copy, so the CUI and file-API threads write nothing
+  and no mutex is needed.
+- Config (defaults): gatt_scan true, gatt_walk_timeout 10 (s, 1..60),
+  gatt_walk_parallel 3 (1..8), gatt_read_all true (false reads only the
+  Identity_Set: Device Name, Appearance, Device Information strings, System
+  ID, PnP ID, Database Hash).
+- Counters (GATT line, 15 + name-unknown): attempted, in-flight, complete,
+  partial, protected, unchanged, busy, timeout, disconnected, error, skipped,
+  deferred, resumed, peer-req, reset-deferred, then name-unknown from
+  UuidNames; conn-limit sits on the Direct LE line. Invariant: attempted =
+  in-flight + the eight outcome counters.
+- Walk outcomes, in precedence order: disconnected, busy, error, timeout,
+  unchanged, protected, complete, partial. complete / partial / protected are
+  Finished_Walks and are not re-walked within info_scan_rate (a recorded
+  Database Hash is re-read first: unchanged means two requests and done).
+  timeout / disconnected leave Resume_State, so the next Link to that address
+  continues the outstanding procedures and reads rather than starting over;
+  a Database Hash change discards it and clears gatt_characteristics.
+- Gatt_Columns (13 Text columns on Device, all synced): gatt_service_uuids,
+  gatt_characteristics (JSON lists, parsed on the wire), gatt_database_hash,
+  gatt_device_name, gatt_appearance, gatt_manufacturer_name,
+  gatt_model_number, gatt_serial_number, gatt_firmware_revision,
+  gatt_hardware_revision, gatt_software_revision, gatt_system_id, gatt_pnp_id.
+  A Walk result never overwrites name / appearance / manufacturer / firmware /
+  lmp_version or any classic_* / le_* column. The schema doc lives in
+  AnemoiBlueHydraImage (docs/blue_hydra_devices_schema.md).
+- Device_Validation: a DART, 2026-10-29, the validated build, two
+  back-to-back runs with gatt_scan false (69.8 min) then true (74.1 min),
+  configs otherwise identical, log_level debug, btmon captured throughout.
+  The device validation report, its scripts and the captures live in the
+  developer's workspace, outside this repo.
+  * 16.5 PASS: attempted 66 = complete 27 + partial 3 + disconnected 36
+    (protected, unchanged, busy, timeout, error all 0); 30 Finished_Walks.
+  * 16.6 PASS: discovery-off fraction 13.72% (off) -> 13.79% (on), limit
+    +1.0 point; p99 (R type 7) 7.173 s -> 7.564 s, limit +0.5 s. Maxima
+    7.725 s / 10.752 s reported, not judged: both runs' longest intervals are
+    the kernel holding discovery off for an LE Extended Create Connection to
+    an allowlisted device, with no Walk in flight.
+  * 16.7 PASS (gatt_read_all true): auto-connect connected/h 55.91 -> 59.91;
+    LMP version reads/h 25.80 -> 32.38. Held Links did not crowd out connects.
+  * 16.18 PASS: discovery-on fraction over every 10-minute window >= 75 % on
+    both runs (min 82.5 % off, 82.1 % on; medians 86.9 / 86.6); the night and
+    midday re-runs bottomed at 79.8 % and 81.0 %.
+  * conn-limit 0 on both runs, so no gatt_walk_parallel change; reset-deferred
+    1 (0.601 s total); mean cycle length 35.42 s on both (35.416 / 35.426).
+  * Finished_Walk durations from the true run's Walk end lines: fresh (n 29)
+    median 2387 ms / max 6681 ms; resumed (n 1) median 1512 ms / max 1512 ms.
+    Final GATT line also read resumed 3, name-unknown 203.
+- The follow-up fix series from that run, re-verified in a 27-minute true run
+  on 2026-10-30 (report section 10):
+  * Handoff moved from the discovery thread to the mgmt reader
+    (Mgmt#on_device_connected + Auto_Connect_Mirror). Handoff lag median /
+    p90 / max went 85 / 634 / 5014 ms -> 1 / 2 / 8 ms, and the "link down
+    before connect" class of disconnected Walks (15 of 36) disappeared.
+  * Error Response 0x10 Unsupported Group Type on the 0x2801 secondary-service
+    sweep is a normal end of that procedure (Android answers that way).
+    "DEVICE-C0001" went partial x3 -> complete.
+  * A mgmt Add Device that outlasts Mgmt::DEFAULT_TIMEOUT counts as add-err
+    with one warn line instead of crashing the discovery loop.
+  * The ENOSYS bearer-connect debug line names its cause (bt_to_errno
+    fallback, typically HCI 0x3E Connection Failed to be Established).
+- Still open:
+  * SIG Assigned Numbers data (name fallback, Appearance names, 0x2904 unit
+    names) stays deferred to item 16 pending the licensing sign-off.
+  * 0x2901 Characteristic User Description descriptors are discovered but not
+    read. Reading them would name the vendor characteristics that make up most
+    of name-unknown (the walker reads 0x2904 only).
+  * Devices that drop the Link within 1-3 s never complete a Walk. Resume_State
+    keeps the progress across Links, but one such device (8 services) never
+    got past service discovery. No change proposed; it is what Resume_State is
+    for.
+  * About half of successful LE connections at the test site end HCI 0x3E
+    (38/68 off, 40/80 on), the same with the feature off. Every ENOSYS bearer
+    connect in the counters is one of these; it caps Finished_Walk yield at
+    roughly half the Links the controller reports connected.
+  * The kernel-side Add Device stall still costs the discovery thread up to
+    the 6 s mgmt timeout (now non-fatal). It coincided with the kernel's LE
+    Extended Create Connection attempts to allowlisted devices.
+  * Out of scope: GATT over BR/EDR, EATT, and private-address correlation via
+    Database Hash / identity values (gatt_serial_number, gatt_system_id and
+    gatt_device_name are stored so a consumer can do it).
 
 --------------------------------------------------------------------------------
 7. Replace DataMapper with sqlite directly (or a faster maintained gem)
