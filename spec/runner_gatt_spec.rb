@@ -3,10 +3,11 @@ require 'spec_helper'
 # The Runner's side of GATT scanning: building the GattScanner, handing
 # auto-connected Links to it off the Mgmt reader thread through the callback
 # it installs (with the Auto_Connect_Mirror behind it), deferring controller
-# resets for Walks in flight, stopping it at shutdown, counting conn_limit and
-# routing Walk results on the Result_Thread. Driven without btmon or a
-# controller, the way spec/ai_spec.rb drives process_connection_events and
-# the result thread: Runner.new, assign the collaborators, call the method.
+# resets for Walks in flight, stopping it at shutdown, counting conn_limit,
+# routing Walk results on the Result_Thread and feeding Walk Device Names to
+# the CUI table from the Parser_Thread. Driven without btmon or a controller,
+# the way spec/ai_spec.rb drives process_connection_events and the result
+# thread: Runner.new, assign the collaborators, call the method.
 # The real GattScanner is used where the Reset_Deferral's timing is what is
 # asserted, with a latch walker standing in for GattWalker so no socket is
 # opened (Requirement 16.1); everywhere else the scanner is a double. The
@@ -261,6 +262,23 @@ describe "BlueHydra::Runner GATT integration" do
   def end_walks(scanner)
     walkers.built.each { |walker| walker.release(:disconnected) unless walker.finished? }
     wait_until("every Walk to finish") { scanner.in_flight.zero? }
+  end
+
+  # A Walk result as GattScanner#finish_walk pushes it, learning nothing.
+  def walk_result(address, outcome)
+    {
+      gatt_walk: true, address: address, outcome: outcome, resumed: false, ended_at: Time.now.to_i,
+      database_hash: nil, hash_changed: false, service_uuids: [], characteristics: [], identity: {},
+      outstanding: { procedures: [], reads: [] }
+    }
+  end
+
+  # A parser result for an LE advertisement carrying a complete name.
+  def advertisement(address)
+    {
+      address: [address], name: ["RunnerGattDevice"], last_seen: [Time.now.to_i],
+      le_mode: [true], le_address_type: ["Random"], le_connectable: [true]
+    }
   end
 
   #############################################################################
@@ -594,7 +612,8 @@ describe "BlueHydra::Runner GATT integration" do
     let(:tracked) { "AA:BB:CC:DD:EE:02" }
 
     before do
-      runner.result_queue = Queue.new
+      runner.result_queue   = Queue.new
+      runner.cui_name_queue = Queue.new
       allow(BlueHydra::Mgmt).to receive(:new).and_return(mgmt)
       allow(BlueHydra::HciCommand).to receive(:new).and_return(hci)
       allow(BlueHydra::L2Ping).to receive(:new).and_return(instance_double(BlueHydra::L2Ping))
@@ -628,17 +647,23 @@ describe "BlueHydra::Runner GATT integration" do
     end
 
     it "builds a GattScanner on the controller index and the Runner's result_queue, whose link_up asks " \
-       "the Runner's current mgmt, and gives it to LeConnect (1.2)" do
+       "the Runner's current mgmt, and gives it to LeConnect (1.2); in daemon mode without the file API " \
+       "(spec_helper's flags, the CUI inactive) the scanner gets cui_name_queue nil (13.13)" do
       allow(mgmt).to receive(:link_up?).with("AA:BB:CC:DD:EE:01").and_return(42.5)
+      expect(BlueHydra.daemon_mode).to be(true)
+      expect(BlueHydra.file_api).to be(false)
 
       run_discovery_thread
 
       scanner = runner.gatt_scanner
       expect(scanner).to be_a(BlueHydra::GattScanner)
       expect(BlueHydra::GattScanner).to have_received(:new)
-        .with(hci_index: runner.mgmt_index, result_queue: runner.result_queue, link_up: kind_of(Proc)).once
+        .with(hci_index: runner.mgmt_index, result_queue: runner.result_queue, cui_name_queue: nil,
+              link_up: kind_of(Proc)).once
       expect(scanner.instance_variable_get(:@hci_index)).to eq(runner.mgmt_index)
       expect(scanner.instance_variable_get(:@result_queue)).to equal(runner.result_queue)
+      expect(scanner.instance_variable_get(:@cui_name_queue)).to be_nil
+      expect(runner.cui_name_queue).to be_a(Queue) # the Runner's own queue exists regardless
 
       link_up = scanner.instance_variable_get(:@link_up)
       expect(link_up.call("AA:BB:CC:DD:EE:01")).to eq(42.5)
@@ -667,6 +692,29 @@ describe "BlueHydra::Runner GATT integration" do
                                          gatt_scanner: scanner }]])
       expect(runner.le_connect).to be(le_connect)
       expect(scanner.counters).to eq(zero)
+    end
+
+    it "gives the scanner the Runner's cui_name_queue when not in daemon mode (the CUI active, 13.13)" do
+      allow(BlueHydra).to receive(:daemon_mode).and_return(false)
+      allow(BlueHydra).to receive(:file_api).and_return(false)
+
+      run_discovery_thread
+
+      expect(BlueHydra::GattScanner).to have_received(:new)
+        .with(hash_including(cui_name_queue: runner.cui_name_queue)).once
+      expect(runner.gatt_scanner.instance_variable_get(:@cui_name_queue)).to equal(runner.cui_name_queue)
+    end
+
+    it "gives the scanner the Runner's cui_name_queue in daemon mode with the file API on, the same guard " \
+       "as the parser thread's update_cui_status (13.13)" do
+      allow(BlueHydra).to receive(:daemon_mode).and_return(true)
+      allow(BlueHydra).to receive(:file_api).and_return(true)
+
+      run_discovery_thread
+
+      expect(BlueHydra::GattScanner).to have_received(:new)
+        .with(hash_including(cui_name_queue: runner.cui_name_queue)).once
+      expect(runner.gatt_scanner.instance_variable_get(:@cui_name_queue)).to equal(runner.cui_name_queue)
     end
 
     it "builds no scanner with gatt_scan false: LeConnect gets nil, the CUI's GATT counters are the zero " \
@@ -964,21 +1012,6 @@ describe "BlueHydra::Runner GATT integration" do
     let(:applied)    { [] }
     let(:pushed)     { [] }
 
-    def walk_result(address, outcome)
-      {
-        gatt_walk: true, address: address, outcome: outcome, resumed: false, ended_at: Time.now.to_i,
-        database_hash: nil, hash_changed: false, service_uuids: [], characteristics: [], identity: {},
-        outstanding: { procedures: [], reads: [] }
-      }
-    end
-
-    def advertisement(address)
-      {
-        address: [address], name: ["RunnerGattDevice"], last_seen: [Time.now.to_i],
-        le_mode: [true], le_address_type: ["Random"], le_connectable: [true]
-      }
-    end
-
     before do
       runner.result_queue       = Queue.new
       runner.info_scan_queue    = Queue.new
@@ -1048,6 +1081,273 @@ describe "BlueHydra::Runner GATT integration" do
       expect(runner.result_thread).to be_alive
       expect(BlueHydra).not_to have_received(:send_event)
       expect(runner).to have_received(:push_to_queue).with(:le, advertised, "Random").once
+    end
+
+    it "apply_gatt_walk_result does only the Device update: gatt_device_name is set, the Device name " \
+       "column is unchanged and cui_status is not touched, the CUI active or not (12.9, 13.13)" do
+      recorded = "AA:BB:CC:DD:EE:D4"
+      allow(BlueHydra).to receive(:daemon_mode).and_return(false)
+      allow(BlueHydra).to receive(:file_api).and_return(false)
+      allow(BlueHydra::CliUserInterfaceTracker).to receive(:apply_gatt_device_name).and_call_original
+      runner.cui_status = {
+        "uuid-recorded" => { address: recorded, last_seen: Time.now.to_i, rssi: "-50 ", name: "shorty", name_source: :short }
+      }
+      before = Marshal.load(Marshal.dump(runner.cui_status))
+      BlueHydra::Device.update_or_create_from_result(advertisement(recorded)) # name: RunnerGattDevice
+      expect(BlueHydra::Device.all(address: recorded).count).to eq(1)
+
+      runner.send(:apply_gatt_walk_result,
+                  walk_result(recorded, :complete).merge(identity: { device_name: "Walked Device" }))
+
+      device = BlueHydra::Device.first(address: recorded)
+      expect(device.name).to eq("RunnerGattDevice")
+      expect(device.gatt_device_name).to eq("Walked Device")
+      expect(runner.cui_status).to eq(before)
+      expect(BlueHydra::CliUserInterfaceTracker).not_to have_received(:apply_gatt_device_name)
+      expect(logs(:error)).to be_empty
+    end
+  end
+
+  #############################################################################
+  # The parser thread feeding the Debug_CUI NAME cell from the Cui_Name_Queue
+  # (Requirements 13.13, 13.14, 12.9). The thread is the shipped
+  # start_parser_thread on the Runner's own queues: the scanner's side is
+  # stood in for by pushing [address, name] pairs onto cui_name_queue, and
+  # chunks are pushed onto chunk_queue the way spec/ai_spec.rb does. The
+  # thread blocks on chunk_queue and drains cui_name_queue only after each
+  # chunk - there is no timer - so every example that wants a pair applied
+  # pushes a chunk after it; the chunk is for a third address so the drain,
+  # not the chunk's own row, is what the assertions see.
+  # cui_status is seeded with rows the shape update_cui_status builds, keyed
+  # by the tracker's uuid, so every lookup goes by :address the way the
+  # tracker's own does. spec_helper runs with daemon_mode true and file_api
+  # false - the guard's off position - so the group sets the CUI active and
+  # the one example about the inactive CUI sets the flags back.
+  #############################################################################
+  describe "the parser thread feeding the Debug_CUI NAME cell" do
+    let(:walked)     { "AA:BB:CC:DD:EE:D6" } # a seen address with an empty NAME cell
+    let(:advertised) { "AA:BB:CC:DD:EE:D7" } # a seen address whose NAME cell holds a complete name
+    let(:chunked)    { "AA:BB:CC:DD:EE:D8" } # the address of the chunk pushed through the parser thread
+    let(:recorded)   { "AA:BB:CC:DD:EE:D9" } # the one address given a Device record
+    let(:unseen)     { "AA:BB:CC:DD:EE:DA" }
+    let(:seen_uuid)  { "uuid-seen" }
+    let(:other_uuid) { "uuid-other" }
+    let(:gatt_name)  { "Walked Device" }
+
+    def seed_row(uuid, address, extra = {})
+      runner.cui_status[uuid] = { address: address, last_seen: Time.now.to_i, rssi: "-50 " }.merge(extra)
+    end
+
+    def row(address)
+      runner.cui_status.values.find { |r| r[:address] == address }
+    end
+
+    def snapshot
+      Marshal.load(Marshal.dump(runner.cui_status))
+    end
+
+    def cui(daemon_mode:, file_api:)
+      allow(BlueHydra).to receive(:daemon_mode).and_return(daemon_mode)
+      allow(BlueHydra).to receive(:file_api).and_return(file_api)
+    end
+
+    # A minimal LE advertising chunk for one address, ending in the chunker's
+    # timestamp line the parser pops as last_seen.
+    def le_chunk(address)
+      [
+        "> HCI Event: LE Meta Event (0x3e) plen 1",
+        "      LE Advertising Report (0x02)",
+        "        Address: #{address} (OUI)",
+        "last_seen: #{Time.now.to_i}"
+      ]
+    end
+
+    def pop_result(timeout: 2)
+      result = runner.result_queue.pop(timeout: timeout)
+      raise "no parser result within #{timeout} s" if result.nil?
+
+      result
+    end
+
+    before do
+      cui(daemon_mode: false, file_api: false)
+      runner.chunk_queue    = Queue.new
+      runner.cui_name_queue = Queue.new
+      runner.result_queue   = Queue.new
+      runner.cui_status     = {}
+      seed_row(seen_uuid, walked)
+      # a row whose NAME cell came from an advertisement, which a GATT name
+      # for the same address must leave alone
+      seed_row(other_uuid, advertised, name: "Other", name_source: :complete)
+      allow(BlueHydra).to receive(:send_event)
+      allow(BlueHydra::CliUserInterfaceTracker).to receive(:apply_gatt_device_name).and_call_original
+    end
+
+    after do
+      thread = runner.parser_thread
+      if thread
+        thread.kill
+        thread.join(2)
+      end
+    end
+
+    it "leaves a queued pair on cui_name_queue and the NAME cell empty while no chunk arrives, then applies " \
+       "it as :gatt on the next chunk, whose own attributes still reach result_queue (no timer, 13.13)" do
+      runner.start_parser_thread
+      runner.cui_name_queue.push([walked, gatt_name])
+
+      # Long enough that any pop timeout or poll would have fired; nothing
+      # wakes the thread but a chunk.
+      sleep 0.7
+
+      expect(row(walked)[:name]).to be_nil
+      expect(runner.cui_name_queue.size).to eq(1)
+      expect(runner.result_queue).to be_empty
+      expect(runner.parser_thread).to be_alive
+      expect(BlueHydra::CliUserInterfaceTracker).not_to have_received(:apply_gatt_device_name)
+
+      runner.chunk_queue.push([le_chunk(chunked)])
+
+      attrs = pop_result
+      wait_until("the drain after the chunk") { row(walked)[:name] }
+
+      expect(attrs[:address]).to eq([chunked])
+      expect(row(walked)).to include(name: gatt_name, name_source: :gatt)
+      expect(row(advertised)).to include(name: "Other", name_source: :complete)
+      expect(row(chunked)).to include(address: chunked, le: true) # the chunk's own row, as before
+      expect(runner.cui_status.size).to eq(3)
+      expect(runner.cui_name_queue).to be_empty
+      expect(runner.parser_thread).to be_alive
+      expect(BlueHydra::CliUserInterfaceTracker).to have_received(:apply_gatt_device_name)
+        .with(runner.cui_status, walked, gatt_name).once
+      expect(logs(:error)).to be_empty
+      expect(BlueHydra).not_to have_received(:send_event)
+    end
+
+    it "applies a queued name on the first chunk when both are already queued at start, and the chunk's " \
+       "own attributes still reach result_queue (13.13)" do
+      # Both are on their queues before the thread starts, so its first pop
+      # returns the chunk at once, and the drain that follows the chunk is
+      # what applies the pair.
+      runner.cui_name_queue.push([walked, gatt_name])
+      runner.chunk_queue.push([le_chunk(chunked)])
+      started = mono
+      runner.start_parser_thread
+
+      attrs = pop_result
+      wait_until("the drain after the chunk") { row(walked)[:name] }
+      applied_at = mono
+
+      expect(applied_at - started).to be < 0.4 # a chunk already queued is parsed at once, nothing is waited on
+      expect(attrs[:address]).to eq([chunked])
+      expect(attrs[:le_mode]).to eq([true])
+      expect(row(walked)).to include(name: gatt_name, name_source: :gatt)
+      expect(row(advertised)).to include(name: "Other", name_source: :complete)
+      # the chunk built its own row as before, with no name of either kind
+      expect(row(chunked)).to include(address: chunked, le: true)
+      expect(row(chunked)[:name]).to be_nil
+      expect(runner.cui_status.size).to eq(3)
+      expect(runner.cui_name_queue).to be_empty
+      expect(runner.parser_thread).to be_alive
+      expect(logs(:error)).to be_empty
+    end
+
+    it "creates no row for an address the table has not seen and leaves a cell holding a complete name " \
+       "alone (13.13, 13.14)" do
+      before = snapshot
+      runner.start_parser_thread
+      # FIFO: once the last pair has landed, the two before it were drained too
+      runner.cui_name_queue.push([unseen, gatt_name])
+      runner.cui_name_queue.push([advertised, gatt_name])
+      runner.cui_name_queue.push([walked, gatt_name])
+      runner.chunk_queue.push([le_chunk(chunked)]) # the drain runs after this chunk
+
+      pop_result
+      wait_until("the drain after the chunk") { row(walked)[:name] }
+
+      expect(row(unseen)).to be_nil
+      expect(row(advertised)).to include(name: "Other", name_source: :complete)
+      expect(row(walked)).to include(name: gatt_name, name_source: :gatt)
+      # the seeded rows plus the chunk's own; nothing for the unseen address
+      expect(runner.cui_status.keys).to include(seen_uuid, other_uuid)
+      expect(runner.cui_status.size).to eq(3)
+      expect(row(chunked)).to include(address: chunked)
+      expect(runner.cui_status[other_uuid]).to eq(before[other_uuid])
+      expect(BlueHydra::CliUserInterfaceTracker).to have_received(:apply_gatt_device_name).exactly(3).times
+      expect(logs(:error)).to be_empty
+    end
+
+    it "logs a pair the tracker refuses at error with its address and goes on to the next pair, the " \
+       "thread alive" do
+      allow(BlueHydra::CliUserInterfaceTracker).to receive(:apply_gatt_device_name)
+        .with(anything, advertised, anything).and_raise(RuntimeError, "cui boom")
+      runner.start_parser_thread
+      runner.cui_name_queue.push([advertised, gatt_name])
+      runner.cui_name_queue.push([walked, gatt_name])
+      runner.chunk_queue.push([le_chunk(chunked)]) # the drain runs after this chunk
+
+      pop_result
+      wait_until("the pair after the refused one to land") { row(walked)[:name] }
+
+      expect(row(walked)).to include(name: gatt_name, name_source: :gatt)
+      expect(row(advertised)).to include(name: "Other", name_source: :complete)
+      expect(logs(:error)).to eq(["gatt: #{advertised} CUI name not applied, RuntimeError: cui boom"])
+      expect(logs(:error).grep(/\AParser thread/)).to be_empty
+      expect(runner.parser_thread).to be_alive
+      expect(BlueHydra).not_to have_received(:send_event)
+    end
+
+    it "in daemon mode without the file API discards queued pairs without touching cui_status, and " \
+       "drain_cui_names with a nil queue is a no-op (the scanner holds nil then, so nothing is queued)" do
+      cui(daemon_mode: true, file_api: false)
+      before = snapshot
+      runner.start_parser_thread
+      runner.cui_name_queue.push([walked, gatt_name])
+      runner.chunk_queue.push([le_chunk(chunked)])
+
+      attrs = pop_result
+      wait_until("the drain after the chunk to empty the queue") { runner.cui_name_queue.empty? }
+
+      expect(attrs[:address]).to eq([chunked])
+      expect(runner.cui_status).to eq(before) # no name applied, and no row from the chunk either
+      expect(BlueHydra::CliUserInterfaceTracker).not_to have_received(:apply_gatt_device_name)
+      expect(runner.parser_thread).to be_alive
+
+      runner.parser_thread.kill
+      runner.parser_thread.join(2)
+      runner.cui_name_queue = nil
+      expect { runner.send(:drain_cui_names) }.not_to raise_error
+      expect(runner.cui_status).to eq(before)
+      expect(logs(:error)).to be_empty
+    end
+
+    it "writes the Device Name to gatt_device_name on the result thread's path and to the NAME cell on " \
+       "the parser thread's, never to the Device name column (12.9)" do
+      seed_row("uuid-recorded", recorded, name: "shorty", name_source: :short)
+      BlueHydra::Device.update_or_create_from_result(advertisement(recorded)) # name: RunnerGattDevice
+      expect(BlueHydra::Device.all(address: recorded).count).to eq(1)
+      before = snapshot
+
+      # the result thread's half: the Device, and nothing in the table
+      runner.send(:apply_gatt_walk_result,
+                  walk_result(recorded, :complete).merge(identity: { device_name: gatt_name }))
+      expect(runner.cui_status).to eq(before)
+
+      # the parser thread's half: the table, and nothing in the Device. The
+      # pair is applied by the drain after the next chunk; the chunk is for
+      # another address so it builds its own row and writes nothing to the
+      # Device (the result thread is not running here).
+      runner.start_parser_thread
+      runner.cui_name_queue.push([recorded, gatt_name])
+      runner.chunk_queue.push([le_chunk(chunked)])
+      pop_result
+      wait_until("the drain after the chunk") { row(recorded)[:name] == gatt_name }
+
+      device = BlueHydra::Device.first(address: recorded)
+      expect(device.name).to eq("RunnerGattDevice")
+      expect(device.gatt_device_name).to eq(gatt_name)
+      expect(row(recorded)).to include(name: gatt_name, name_source: :gatt)
+      expect(logs(:error)).to be_empty
     end
   end
 end

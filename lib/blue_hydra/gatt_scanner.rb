@@ -91,8 +91,10 @@ module BlueHydra
   # while it waits. Runner#stop, on the signal-handling thread, calls
   # stopping! and later shutdown, which closes the walkers' bearers and joins
   # the Walk threads with @mutex released, so a Walk finishing meanwhile can
-  # still take it to be counted. Nothing here touches the database, raw_queue
-  # or chunk_queue; the one queue written is result_queue.
+  # still take it to be counted. Nothing here touches the database or the
+  # CUI's cui_status; the queues written are result_queue and, when the CUI
+  # is active, cui_name_queue; never raw_queue or chunk_queue (Requirement
+  # 15.6).
   class GattScanner
     # Requirement 13.1, in the Debug_CUI's GATT line order (13.5).
     COUNTERS = %i[attempted in-flight complete partial protected unchanged busy timeout
@@ -137,7 +139,18 @@ module BlueHydra
 
     # == Parameters
     #   hci_index       controller index, passed to each walker
-    #   result_queue    the Runner's result_queue; the only queue written
+    #   result_queue    the Runner's result_queue, where every Walk result
+    #                   goes (Requirement 11.1)
+    #   cui_name_queue  the Runner's Cui_Name_Queue, a Queue, or nil (the
+    #                   default) when the operator CUI is inactive. Each
+    #                   result whose identity carries a Device Name also puts
+    #                   [address, device_name] here, for the NAME cell of the
+    #                   CUI's device table (Requirement 13.13). The name takes
+    #                   a queue of its own because the table is written by the
+    #                   parser thread, while the result goes to the
+    #                   Result_Thread, whose database writes make it too slow
+    #                   for a table the operator watches live; the parser
+    #                   thread drains this queue between chunks.
     #   link_up         callable(address) -> monotonic time the Link came up, or
     #                   nil when it is down; ->(a) { mgmt.link_up?(a) }
     #   local_address   the controller's identity address, the bearer's source
@@ -148,7 +161,7 @@ module BlueHydra
     #   tracker         the Gatt_Tracker (module interface of GattTracker)
     #   walker_class    builds one walker per Walk with GattWalker's keywords
     #   clock           see Clocks in the class comment
-    def initialize(hci_index:, result_queue:, link_up:,
+    def initialize(hci_index:, result_queue:, link_up:, cui_name_queue: nil,
                    local_address: BlueHydra::LOCAL_ADAPTER_ADDRESS,
                    walk_parallel: BlueHydra.config["gatt_walk_parallel"],
                    walk_timeout: BlueHydra.config["gatt_walk_timeout"],
@@ -166,6 +179,7 @@ module BlueHydra
 
       @hci_index      = hci_index
       @result_queue   = result_queue
+      @cui_name_queue = cui_name_queue
       @link_up        = link_up
       @local_address  = local_address
       @walk_parallel  = walk_parallel
@@ -490,8 +504,10 @@ module BlueHydra
     #   3. build the result for OUTCOMES_WITH_RESULT
     #   4. write the Requirement 13.6 line
     #   5. under @mutex: in-flight down and the outcome counter up, the entry
-    #      removed, the idle condition broadcast when none is left, and the
-    #      result pushed unless shutdown has begun
+    #      removed, the idle condition broadcast when none is left, and,
+    #      unless shutdown has begun, the result pushed and then, with the
+    #      CUI active and a Device Name in the result, [address, name] pushed
+    #      onto cui_name_queue
     #
     # The tracker is updated while the Walk is still in @walks, so a handoff
     # of the same address meanwhile is skipped (4.11) instead of planning from
@@ -499,17 +515,19 @@ module BlueHydra
     # one critical section with the map and the push: once a caller sees the
     # outcome counted, the tracker, the log line and result_queue already
     # reflect the Walk, and in-flight never disagrees with @walks.size. The
-    # push is decided under @mutex, as stopping! sets the flag under it, so no
-    # result follows the start of shutdown (14.3); result_queue is the
-    # Runner's unbounded Queue, so the push never blocks. It ignores the
-    # Runner's stunned flag (11.1): stunning sheds cheap, repeated parser
-    # output, and a Walk result is rare and costly to get again.
+    # pushes are decided under @mutex, as stopping! sets the flag under it, so
+    # neither a result nor a CUI name follows the start of shutdown (14.3);
+    # both queues are the Runner's unbounded Queues, so the pushes never
+    # block. The result push ignores the Runner's stunned flag (11.1):
+    # stunning sheds cheap, repeated parser output, and a Walk result is rare
+    # and costly to get again.
     #
     # Each step before the last rescues its own StandardError, so the last
     # always runs and every Walk is counted exactly once. Within the last, the
-    # push comes after the bookkeeping and rescues for itself, so a queue that
-    # refuses the result (closed at shutdown, say) cannot strand the entry in
-    # @walks, which would hold its slot and skip the address for good.
+    # pushes come after the bookkeeping and each rescues for itself, so a
+    # queue that refuses its push (closed at shutdown, say) cannot strand the
+    # entry in @walks, which would hold its slot and skip the address for
+    # good, nor keep the other queue's push from happening.
     def finish_walk(walk, walker, report)
       address = walk.address
       report  = checked_report(address, report)
@@ -528,17 +546,39 @@ module BlueHydra
           @counters[outcome || :error] += 1
           @walks.delete(address)
           @idle.broadcast if @walks.empty?
-          push_result(address, result) if result && !@stopping
+          if result && !@stopping
+            push_result(address, result)
+            push_cui_name(address, result)
+          end
         end
       end
     end
 
-    # The one write to result_queue (Requirement 15.6: never raw_queue or
-    # chunk_queue). Called under @mutex; see finish_walk.
+    # The one write to result_queue. Called under @mutex; see finish_walk.
+    # With push_cui_name below, the whole list of queue writes (Requirement
+    # 15.6: never raw_queue or chunk_queue).
     def push_result(address, result)
       @result_queue.push(result)
     rescue StandardError => e
       log_escape(address, e, "pushing the result")
+    end
+
+    # The one write to cui_name_queue: [address, device_name] for the NAME
+    # cell of the CUI's device table (Requirement 13.13), when the queue
+    # exists (nil with the CUI inactive) and the result's identity carries a
+    # non-empty Device Name. Called under @mutex straight after push_result
+    # and under its condition, so no pair follows the start of shutdown
+    # either (14.3). Rescues for itself as push_result does: a refused push
+    # is logged and the Walk's in-flight entry is still gone.
+    def push_cui_name(address, result)
+      return if @cui_name_queue.nil?
+
+      name = result.dig(:identity, :device_name)
+      return unless name.is_a?(String) && !name.empty?
+
+      @cui_name_queue.push([address, name])
+    rescue StandardError => e
+      log_escape(address, e, "pushing the CUI name")
     end
 
     # Whether +entry+ is the in-flight entry of the calling Walk thread.

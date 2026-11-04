@@ -8,6 +8,7 @@ module BlueHydra
     attr_accessor :command,
                   :raw_queue,
                   :chunk_queue,
+                  :cui_name_queue,
                   :result_queue,
                   :btmon_thread,
                   :discovery_thread,
@@ -143,6 +144,7 @@ module BlueHydra
         # by true IPC sockets at some point but these work prety damn well
         self.raw_queue          = Queue.new # btmon thread   -> chunker thread
         self.chunk_queue        = Queue.new # chunker thread -> parser thread
+        self.cui_name_queue     = Queue.new # GATT walk threads -> parser thread (Device Names for the CUI table)
         self.result_queue       = Queue.new # parser thread, GATT walk threads -> result thread
         self.info_scan_queue    = Queue.new # result thread  -> discovery thread (classic)
         self.le_info_scan_queue = Queue.new # result thread  -> discovery thread (LE, serviced during discovery)
@@ -459,6 +461,7 @@ module BlueHydra
 
       self.raw_queue          = nil
       self.chunk_queue        = nil
+      self.cui_name_queue     = nil
       self.result_queue       = nil
       self.info_scan_queue    = nil
       self.le_info_scan_queue = nil
@@ -1260,11 +1263,17 @@ module BlueHydra
           # feature must not add. Routed through the accessor rather than
           # capturing the Mgmt instance so it follows whatever mgmt the runner
           # holds (Mgmt reopens its socket in place; self.mgmt is assigned once).
+          #
+          # cui_name_queue is handed over only while the operator CUI is active
+          # - the guard the parser thread's update_cui_status sits behind - and
+          # is nil otherwise, so with the CUI off the scanner queues no Device
+          # Name and the parser thread's drain_cui_names has nothing to find.
           if BlueHydra.config["gatt_scan"]
             self.gatt_scanner = BlueHydra::GattScanner.new(
-              hci_index:    mgmt_index,
-              result_queue: self.result_queue,
-              link_up:      ->(address) { self.mgmt.link_up?(address) }
+              hci_index:      mgmt_index,
+              result_queue:   self.result_queue,
+              cui_name_queue: (BlueHydra.daemon_mode && !BlueHydra.file_api) ? nil : self.cui_name_queue,
+              link_up:        ->(address) { self.mgmt.link_up?(address) }
             )
           end
 
@@ -1663,7 +1672,12 @@ module BlueHydra
           @rssi_data ||= {} if BlueHydra.signal_spitter
 
           # get the chunks and parse them, track history, update CUI and push
-          # to data processing thread
+          # to data processing thread. The pop blocks: nothing closes
+          # chunk_queue or pushes nil onto it, so the loop runs until this
+          # thread is killed at stop. GATT Device Names waiting on
+          # cui_name_queue are applied at the end of each chunk's body
+          # (drain_cui_names); there is deliberately no pop timeout or poll to
+          # apply them while btmon is quiet - see that method for why.
           while chunk = chunk_queue.pop do
             p = BlueHydra::Parser.new(chunk.dup)
             p.parse
@@ -1792,6 +1806,7 @@ module BlueHydra
 
             end
 
+            drain_cui_names
           end
         rescue => e
           BlueHydra.logger.error("Parser thread #{e.message}")
@@ -2141,6 +2156,67 @@ module BlueHydra
     rescue => e
       BlueHydra.logger.error("gatt: #{result[:address]} Walk result not applied, #{e.class}: #{e.message}")
       e.backtrace.each { |line| BlueHydra.logger.error(line) }
+    end
+
+    # Move the GATT Device Names waiting on cui_name_queue into the NAME cell
+    # of the CUI's device table (Requirements 13.13, 13.14). Called on the
+    # parser thread once at the end of each chunk it parses, after
+    # update_cui_status, so a Walk's name lands in the table on the parser
+    # thread's next chunk.
+    #
+    # There is no timer and no poll behind this, on purpose. The table's rows
+    # already update only on chunks (update_cui_status, once per chunk), so a
+    # name arriving on the next chunk has the same latency as every other
+    # cell. A walked device is an advertising device: its chunks keep coming
+    # while its name matters, and if btmon goes silent the row's last_seen
+    # stops advancing and the CUI expires the row anyway, name or no name. So
+    # a bounded chunk_queue.pop would show an operator nothing extra and would
+    # give the parser loop a second wake-up path to reason about. Putting the
+    # name on chunk_queue as a tagged entry is out as well: Requirement 15.6
+    # keeps everything GATT-related off raw_queue and chunk_queue, which is
+    # what lets the chunker and parser be verified against btmon captures
+    # alone.
+    #
+    # Why the parser thread and not the result thread, which already handles
+    # the Walk result: cui_status is the live operator table, and the result
+    # thread sits behind database writes that would delay it. The parser
+    # thread already builds every row (update_cui_status, once per chunk), so
+    # applying the names here keeps the table at one writer, rows and names
+    # alike - the only other party is the CUI thread, which reads the rows and
+    # prunes expired ones at render time with no mutex, the GVL-only posture
+    # that exists today. The result thread never writes cui_status.
+    #
+    # The scanner pushes [address, name] from its Walk threads in the same
+    # critical section as the result push, so no pair arrives after shutdown
+    # begins (Requirement 14.3). It holds the queue only while the CUI is
+    # active, nil otherwise, so with the CUI off nothing is ever queued; the
+    # guard here is the same one update_cui_status sits behind and covers the
+    # case of a CUI flag changing under a running process, and the nil check
+    # covers a drain before start or after stop has nilled the queue. The pop
+    # is non-blocking (ThreadError on empty) so the parser thread is never
+    # held here. apply_gatt_device_name writes only :name and :name_source of
+    # a row that already exists, never creates a row and yields to a complete
+    # advertised name; the Device `name` column is not written on this path
+    # (Requirement 12.9) - the Walk's name reached gatt_device_name through
+    # apply_gatt_walk_result. Each pair is rescued on its own so one bad entry
+    # costs one error line and neither the remaining pairs nor the thread.
+    def drain_cui_names
+      queue = cui_name_queue
+      return if queue.nil?
+
+      cui_active = !BlueHydra.daemon_mode || BlueHydra.file_api
+      loop do
+        address, name = queue.pop(true)
+        next unless cui_active
+
+        begin
+          BlueHydra::CliUserInterfaceTracker.apply_gatt_device_name(cui_status, address, name)
+        rescue => e
+          BlueHydra.logger.error("gatt: #{address} CUI name not applied, #{e.class}: #{e.message}")
+        end
+      end
+    rescue ThreadError
+      # queue empty: every pending name has been applied
     end
 
     # The Reset_Deferral (Requirements 3.9 to 3.12): block the discovery thread

@@ -679,6 +679,123 @@ describe BlueHydra::GattScanner do
     end
   end
 
+  # The scanner's second queue: [address, Device Name] pairs for the NAME cell
+  # of the CUI's device table, read by the parser thread. It is nil, the
+  # default, when the CUI is inactive; `scanner` above is built that way, so
+  # every other example here runs with no queue.
+  describe "the Cui_Name_Queue (13.13, 14.3, 15.6)" do
+    let(:names)   { Queue.new }
+    let(:scanner) { new_scanner(cui_name_queue: names) }
+    let(:named)   { { device_name: "Pixel" } }
+
+    it "pushes [address, device_name] with the result, after it and in the same critical section, " \
+       "for a result carrying identity[:device_name]" do
+      # A queue that records what finish_walk had done when the pair arrived:
+      # the result already on result_queue, and the scanner's mutex still held
+      # by the pushing thread (the "same critical section" of 13.13).
+      seen      = []
+      recording = Class.new do
+        attr_accessor :mutex
+
+        def initialize(seen, results)
+          @seen    = seen
+          @results = results
+        end
+
+        def push(pair)
+          @seen << [pair, @results.size, mutex.owned?, Thread.current]
+        end
+      end.new(seen, results)
+      recorded        = new_scanner(cui_name_queue: recording)
+      recording.mutex = recorded.instance_variable_get(:@mutex)
+
+      walker = start_walk(mac, on: recorded)
+      finish(walker, report(:complete, identity: named))
+
+      expect(seen).to eq([[[mac, "Pixel"], 1, true, walker.thread]])
+      expect(results.pop[:identity]).to eq(named)
+      expect(recorded.counters).to eq(zero.merge(attempted: 1, complete: 1))
+      expect(logs(:error)).to be_empty
+    end
+
+    it "pushes a pair onto a real Queue, once per Walk, keyed by the walked address" do
+      first = start_walk(mac)
+      finish(first, report(:complete, identity: named))
+      second = start_walk(other)
+      finish(second, report(:partial, address: other, identity: { device_name: "Beacon 7" }))
+
+      expect(names.size).to eq(2)
+      expect([names.pop, names.pop]).to eq([[mac, "Pixel"], [other, "Beacon 7"]])
+      expect(results.size).to eq(2)
+    end
+
+    it "pushes nothing when the identity has no device_name, or a nil or empty one, " \
+       "while the result still goes" do
+      [{}, { device_name: nil }, { device_name: "" }, { appearance: "0x0040" }].each do |identity|
+        walker = start_walk(mac)
+        finish(walker, report(:timeout, identity: identity, state: advanced_state))
+        expect(names).to be_empty, "a pair was pushed for identity #{identity.inspect}"
+        expect(results.pop[:identity]).to eq(identity)
+      end
+      expect(logs(:error)).to be_empty
+    end
+
+    it "pushes nothing and raises nothing when built without a queue (the default)" do
+      quiet  = new_scanner                                     # cui_name_queue: nil
+      walker = start_walk(mac, on: quiet)
+      finish(walker, report(:complete, identity: named))
+
+      expect(results.size).to eq(1)
+      expect(quiet.counters).to eq(zero.merge(attempted: 1, complete: 1))
+      expect(logs(:error)).to be_empty
+    end
+
+    it "pushes nothing after stopping!, as the result is withheld too (14.3)" do
+      walker = start_walk(mac)
+      scanner.stopping!
+      finish(walker, report(:complete, identity: named))
+
+      expect(scanner.counters).to eq(zero.merge(attempted: 1, complete: 1))
+      expect(results).to be_empty
+      expect(names).to be_empty
+    end
+
+    BlueHydra::GattScanner::OUTCOMES.each do |outcome|
+      with_result = BlueHydra::GattScanner::OUTCOMES_WITH_RESULT.include?(outcome)
+
+      it "#{outcome} with a Device Name in the identity: " \
+         "#{with_result ? 'one pair, with the result' : 'no pair, as there is no result'}" do
+        walker = start_walk(mac)
+        finish(walker, report(outcome, identity: named))
+
+        expect(scanner.counters).to eq(zero.merge(attempted: 1, outcome => 1))
+        expect(results.size).to eq(with_result ? 1 : 0)
+        expect(names.size).to eq(with_result ? 1 : 0)
+        expect(names.pop).to eq([mac, "Pixel"]) if with_result
+      end
+    end
+
+    it "logs a queue that refuses the pair through the escape path and still counts the Walk, drops " \
+       "its in-flight entry and pushes the result" do
+      # A closed Queue is what a refused push looks like in practice:
+      # Queue#push raises ClosedQueueError once close has been called.
+      closed  = Queue.new.tap(&:close)
+      scanner = new_scanner(cui_name_queue: closed)
+      walker  = start_walk(mac, on: scanner)
+      finish(walker, report(:complete, identity: named, database_hash: hash_a))
+
+      line = logs(:error).find { |message| message.start_with?("gatt: #{mac} pushing the CUI name raised") }
+      expect(line).to start_with("gatt: #{mac} pushing the CUI name raised ClosedQueueError: queue closed\n  ")
+      expect(logs(:error).size).to eq(1)
+      expect(scanner.counters).to eq(zero.merge(attempted: 1, complete: 1))
+      expect(scanner.in_flight).to eq(0)
+      expect(results.size).to eq(1)
+      expect(results.pop[:identity]).to eq(named)
+      expect(real_tracker.finished(mac)).to eq(finished_at: t0, database_hash: hash_a)   # the tracker step ran
+      expect(walker.closes).to eq([walker.thread])                                      # and the bearer closed
+    end
+  end
+
   describe "an exception escaping run (13.7)" do
     it "is counted error and logged with class, message and backtrace while the other Walk and new " \
        "handoffs go on" do

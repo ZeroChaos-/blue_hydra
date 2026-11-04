@@ -151,6 +151,52 @@ module BlueHydra
       @le_direct_conn_limit_count += 1
     end
 
+    # Fill a row's NAME cell from a GATT Device Name (0x2A00) read during a
+    # Walk (Requirements 13.13, 13.14).
+    #
+    # The NAME cell has three possible sources, recorded in the row's
+    # :name_source, and they rank complete > gatt > short:
+    #   :complete  btmon `Name:` / `Name (complete):`, written by
+    #              update_cui_status and overwriting anything on change
+    #   :gatt      this method; replaces a shortened name or an empty cell but
+    #              never a complete name
+    #   :short     btmon `Name (short):`, written by update_cui_status only
+    #              into an empty cell
+    # So a later complete name replaces either of the others, a later GATT name
+    # replaces only a shortened name or an empty cell, and a later shortened
+    # name fills only an empty cell.
+    #
+    # Rows are keyed by the tracker's internal uuid, not by address, so the row
+    # is found by its :address. A row is never created here: an address the
+    # table has not seen stays absent, and a nil / empty / non-String name is
+    # a no-op. Only cui_status is touched; the Device `name` column is never
+    # written on this path (Requirement 12.9).
+    #
+    # Threads. cui_status is written by the parser thread alone: rows through
+    # update_cui_status, once per chunk, and names through this method, which
+    # Runner#drain_cui_names calls on that same thread after every chunk and
+    # every 0.5 s pop timeout, with the pairs the GATT scanner's Walk threads
+    # put on cui_name_queue. The result thread never writes cui_status: it
+    # sits behind database writes that would delay a table the operator
+    # watches live. The CUI thread reads the rows and prunes expired ones in
+    # CliUserInterface#cui_status with no mutex, the GVL-only posture that
+    # exists today; Hash#values takes its snapshot atomically in MRI, and a
+    # write that lands on a row the CUI thread has just pruned is harmless
+    # because nothing reads that row again.
+    #
+    # Returns true when the cell was written, false otherwise.
+    def self.apply_gatt_device_name(cui_status, address, name)
+      return false unless name.is_a?(String) && !name.empty?
+
+      row = cui_status.values.find { |r| r[:address] == address }
+      return false unless row
+      return false if row[:name_source] == :complete
+
+      row[:name]        = name
+      row[:name_source] = :gatt
+      true
+    end
+
     # This method initializes with a runner and some data and then handles
     # updating the cui_status to track the devices for the CUI
     #
@@ -261,6 +307,13 @@ module BlueHydra
         :company, :le_company_data
       ].each do |key|
         if attrs[key] && attrs[key].first
+          # A complete name (btmon `Name:` / `Name (complete):`) tops the NAME
+          # precedence (see apply_gatt_device_name). Record its source even when
+          # the text is unchanged below: the same text may already sit in the
+          # cell from a GATT read, and :complete is what stops a later GATT
+          # Device Name replacing it.
+          cui_status[@uuid][:name_source] = :complete if key == :name
+
           if cui_status[@uuid][key] != attrs[key].first
             # The newest reading in the batch. A batch can hold many advertising
             # reports for one device, and .first showed the oldest of them - so a
@@ -287,10 +340,13 @@ module BlueHydra
       # simplified copy of internal tracking uuid
       cui_status[@uuid][:uuid] = @uuid.split('-')[0]
 
-      # if we have a short name set it as the name attribute
+      # if we have a short name set it as the name attribute, but only into an
+      # empty cell: a shortened name is the bottom of the NAME precedence and
+      # never displaces a complete or GATT name (see apply_gatt_device_name)
       if attrs[:short_name]
         unless attrs[:short_name] == [nil] || cui_status[@uuid][:name]
-          cui_status[@uuid][:name] = attrs[:short_name].first
+          cui_status[@uuid][:name]        = attrs[:short_name].first
+          cui_status[@uuid][:name_source] = :short
           #BlueHydra.logger.warn("short name found: #{attrs[:short_name]}")
         end
       end
