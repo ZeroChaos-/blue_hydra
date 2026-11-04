@@ -406,7 +406,7 @@ HELP
         # pbuff is the print buffer we build up to write to the screen, each
         # time we append lines to pbuff we need to increment the lines count
         # so that we know how many lines we are trying to output.
-        pbuff = ""
+        pbuff = +""
         lines = 1
 
         # clear screen, doesn't require line increment cause it wipes
@@ -475,12 +475,29 @@ HELP
                      "off-for: #{'%.1f' % runner.mgmt.discovery_off_for}s\n"
             lines += 1
           end
+          # conn-limit sits here and not on the GATT line: EMLINK is the local
+          # controller refusing a direct connect for want of a link slot, a
+          # Direct_Connect_Path outcome, even though held GATT Walks are the
+          # usual reason the slots are gone.
           pbuff << "Direct LE: connected: #{BlueHydra::CliUserInterfaceTracker.le_direct_connected_count}, " \
                    "unreachable: #{BlueHydra::CliUserInterfaceTracker.le_direct_failed_count}, " \
                    "error: #{BlueHydra::CliUserInterfaceTracker.le_direct_error_count}, " \
                    "abandoned: #{BlueHydra::CliUserInterfaceTracker.le_direct_abandoned_count}, " \
+                   "conn-limit: #{BlueHydra::CliUserInterfaceTracker.le_direct_conn_limit_count}, " \
                    "dropped: #{BlueHydra::CliUserInterfaceTracker.le_direct_dropped_count}, " \
                    "queued: #{runner.le_direct_pending ? runner.le_direct_pending.size : 0}\n"
+          lines += 1
+          # GATT walk health, in GattScanner::COUNTERS order so the line reads
+          # the same as the invariant: attempted == in-flight + the outcome
+          # counters. No scanner (gatt_scan false, or a runner that has not
+          # grown the accessor) renders all zeros rather than dropping the line,
+          # so the Device_Validation scripts always find it. name-unknown is the
+          # Uuid_Formatter's, not the scanner's, hence read from UuidNames.
+          scanner  = runner.respond_to?(:gatt_scanner) && runner.gatt_scanner
+          counters = scanner ? scanner.counters : BlueHydra::GattScanner::ZERO_COUNTERS
+          pbuff << "GATT: " +
+                   BlueHydra::GattScanner::COUNTERS.map { |name| "#{name}: #{counters[name]}" }.join(", ") +
+                   ", name-unknown: #{BlueHydra::UuidNames.name_unknown_count}\n"
           lines += 1
         end
 

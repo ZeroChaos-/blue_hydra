@@ -35,7 +35,10 @@ module BlueHydra
     #   kernel only emits this for an explicit connect attempt - a background
     #   auto-connect that never sees the device advertise produces no event at
     #   all, and lands in auto_connect_timeout_count instead.
-    # auto_connect_add_failed_count: mgmt Add Device calls that were refused
+    # auto_connect_add_failed_count: mgmt Add Device calls that were refused, or
+    #   whose reply did not arrive within Mgmt::DEFAULT_TIMEOUT (Runner#add_to_
+    #   auto_connect rescues that timeout so one slow device does not end the
+    #   discovery cycle)
     # auto_connect_timeout_count:    devices added that never connected before the
     #   CONNECT phase ended (neither Connected nor Connect Failed). Without this
     #   those devices were missing from the arithmetic and added never reconciled
@@ -49,6 +52,12 @@ module BlueHydra
     # le_direct_abandoned_count: connects still in flight when the discovery-off
     #   budget ran out. Distinct from failed on purpose: a rising number here means
     #   the budget is the binding constraint, not that devices are unreachable.
+    # le_direct_conn_limit_count: connects the local controller refused with
+    #   EMLINK (LeConnect outcome :conn_limit) because it had no free link slot.
+    #   Distinct from failed and error on purpose, and never a ConnectTracker
+    #   strike: the refusal is the controller's, not the device's. A rising number
+    #   with gatt_scan on means held links are exhausting the controller, and
+    #   lowering gatt_walk_parallel is the lever.
     @auto_connect_added_count         = 0
     @auto_connect_connected_count     = 0
     @auto_connect_failed_count        = 0
@@ -59,6 +68,7 @@ module BlueHydra
     @le_direct_dropped_count          = 0
     @le_direct_abandoned_count        = 0
     @le_direct_error_count            = 0
+    @le_direct_conn_limit_count       = 0
 
     class << self
       attr_accessor :multi_address_chunk_count,
@@ -74,7 +84,8 @@ module BlueHydra
                     :le_direct_failed_count,
                     :le_direct_dropped_count,
                     :le_direct_abandoned_count,
-                    :le_direct_error_count
+                    :le_direct_error_count,
+                    :le_direct_conn_limit_count
     end
 
     # Increment helpers. Each counter has a single writer thread (the chunker
@@ -134,6 +145,10 @@ module BlueHydra
 
     def self.increment_le_direct_error_count
       @le_direct_error_count += 1
+    end
+
+    def self.increment_le_direct_conn_limit_count
+      @le_direct_conn_limit_count += 1
     end
 
     # This method initializes with a runner and some data and then handles
