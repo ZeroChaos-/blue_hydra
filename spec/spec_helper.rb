@@ -1,6 +1,7 @@
 # encoding: UTF-8
 require 'rubygems'
 require 'rspec'
+require 'rantly/rspec'
 require 'simplecov'
 SimpleCov.start
 

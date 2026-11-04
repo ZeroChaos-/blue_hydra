@@ -17,6 +17,7 @@ end
 
 group :test do
   gem 'simplecov'
+  gem 'rantly', '3.0.0'
 end
 
 group :test, :development do
