@@ -27,6 +27,12 @@ require 'louis'
 # Add to Load Path
 $:.unshift(File.dirname(__FILE__))
 
+# Required here rather than with the other blue_hydra/* files at the bottom:
+# GattConfig.normalise runs inside the config-loading block below, which is
+# evaluated as part of the module body, long before those requires. It is a
+# pure module with no dependencies, so loading it this early is safe.
+require 'blue_hydra/gatt_config'
+
 # Helpful Errors to raise in specific cased.
 class BluezNotReadyError < StandardError; end
 class FailedThreadError < StandardError; end
@@ -89,8 +95,21 @@ module BlueHydra
     # Devices we have no advertising opinion on yet are still attempted; only a
     # device that has said "not connectable" and never said otherwise is skipped.
     # See BlueHydra::ConnectTracker.
-    "connect_to_nonconnectable" => false
+    "connect_to_nonconnectable" => false,
+    # GATT scanning: walk each connected LE device's GATT database over ATT on
+    # the links the connect paths already raise. Validated by
+    # BlueHydra::GattConfig in the config block below; a rejected value falls
+    # back to its default with one warn line rather than stopping the sensor.
+    "gatt_scan"          => true,         # read once at startup; false opens no ATT bearer
+    "gatt_walk_timeout"  => 10,           # seconds per Walk (Walk_Bound), 1..60, Integer or Float
+    "gatt_walk_parallel" => 3,            # Walks in flight at most, 1..8, Integer
+    "gatt_read_all"      => true          # false reads only the identity characteristics
   }
+
+  # Warnings produced while loading the config. No logger exists yet at that
+  # point, so they are parked here and emitted at warn level right after
+  # update_logger runs below, still at startup and before any thread starts.
+  @@config_warnings = []
 
   # Create config file with defaults if missing or load and update.
   @@config = if File.exist?(CONFIG_FILE)
@@ -107,6 +126,12 @@ module BlueHydra
                    new_config["info_scan_rate"] = 45
                  end
                end
+               # GATT options: each rejected value becomes its default plus one
+               # warning (Requirements 1.5, 1.6). Merging the normalised values
+               # back means the file rewrite below carries the value in effect,
+               # as it already does for the clamped info_scan_rate.
+               gatt_values, @@config_warnings = GattConfig.normalise(new_config)
+               new_config.merge!(gatt_values)
                #conversions
                new_config["ui_inc_filter_mac"].map{|mac|mac.upcase!} if new_config["ui_inc_filter_mac"]
                new_config["ui_inc_filter_prox"].map{|prox|prox.downcase!} if new_config["ui_inc_filter_prox"]
@@ -180,6 +205,10 @@ module BlueHydra
 
   initialize_logger
   update_logger
+
+  # Earliest point a logger with the configured level exists; nothing has
+  # started a thread yet.
+  @@config_warnings.each { |warning| @@logger.warn(warning) }
 
   # the RSSI log will only get used if the appropriate config value is set
   #
@@ -412,6 +441,18 @@ require 'blue_hydra/mgmt'
 require 'blue_hydra/hci_command'
 require 'blue_hydra/l2ping'
 require 'blue_hydra/le_connect'
+# GATT scanning. Ordered so each file's own requires are already satisfied:
+# gatt_walker needs mgmt and le_connect (above), gatt_scanner needs
+# gatt_tracker and gatt_walker. gatt_config is required at the top of this file
+# because the config block uses it.
+require 'blue_hydra/att_codec'
+require 'blue_hydra/att_server'
+require 'blue_hydra/value_decoder'
+require 'blue_hydra/uuid_names'
+require 'blue_hydra/gatt_characteristics'
+require 'blue_hydra/gatt_tracker'
+require 'blue_hydra/gatt_walker'
+require 'blue_hydra/gatt_scanner'
 require 'blue_hydra/runner'
 require 'blue_hydra/command'
 require 'blue_hydra/device'
