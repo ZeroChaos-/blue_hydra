@@ -1606,6 +1606,116 @@ describe "BlueHydra::Runner helpers" do
     expect(runner.le_pending.size).to eq(1)          # remainder held, never dropped
   end
 
+  # Requirement 19: a mgmt Add Device the kernel answers after
+  # Mgmt::DEFAULT_TIMEOUT costs one device, not the discovery cycle. On device
+  # the kernel serialised Add Device behind an in-flight LE create-connection,
+  # Mgmt#deliver_command raised Timeout::Error, and the discovery loop logged
+  # "Discovery loop crashed: mgmt: timed out awaiting reply to opcode 0x0033"
+  # and slept 20s.
+  describe "add_to_auto_connect on a slow mgmt reply (Requirement 19)" do
+    let(:tracker)   { BlueHydra::CliUserInterfaceTracker }
+    let(:slow_addr) { "AA:BB:CC:DD:EE:90" }
+    let(:next_addr) { "AA:BB:CC:DD:EE:91" }
+    let(:timeout_error) do
+      Timeout::Error.new(format("mgmt: timed out awaiting reply to opcode 0x%04x", BlueHydra::Mgmt::CMD_ADD_DEVICE))
+    end
+
+    before do
+      allow(BlueHydra.logger).to receive(:warn)
+      allow(BlueHydra.logger).to receive(:error)
+      allow(BlueHydra.logger).to receive(:debug)
+    end
+
+    # add_device raises Timeout::Error for slow_addr and succeeds for anything else
+    def mgmt_timing_out_on(slow_addr)
+      m, events = fake_mgmt_with_events
+      allow(m).to receive(:add_device) do |address, _type|
+        raise timeout_error if address == slow_addr
+        BlueHydra::Mgmt::STATUS_SUCCESS
+      end
+      [m, events]
+    end
+
+    def runner_with(mgmt)
+      runner = BlueHydra::Runner.new
+      runner.mgmt               = mgmt
+      runner.auto_connect_list  = {}
+      runner.le_pending         = {}
+      runner.le_info_scan_queue = Queue.new
+      runner
+    end
+
+    it "counts the timeout as add-err, adds no entry and warns once naming the address and timeout (19.1)" do
+      runner    = runner_with(mgmt_timing_out_on(slow_addr).first)
+      add_err   = tracker.auto_connect_add_failed_count
+      added     = tracker.auto_connect_added_count
+
+      expect { runner.add_to_auto_connect(slow_addr, "Public") }.not_to raise_error
+
+      expect(tracker.auto_connect_add_failed_count - add_err).to eq(1)
+      expect(tracker.auto_connect_added_count - added).to eq(0)
+      expect(runner.auto_connect_list).to be_empty
+      expect(BlueHydra.logger).to have_received(:warn)
+        .with(/mgmt add device for #{Regexp.escape(slow_addr)} timed out after #{BlueHydra::Mgmt::DEFAULT_TIMEOUT}s/)
+        .once
+      expect(BlueHydra.logger).not_to have_received(:error)
+    end
+
+    it "fill_auto_connect moves on to the next pending address after a timeout (19.1)" do
+      runner = runner_with(mgmt_timing_out_on(slow_addr).first)
+      runner.le_pending = { slow_addr => "Public", next_addr => "Random" }
+      add_err = tracker.auto_connect_add_failed_count
+
+      runner.fill_auto_connect
+
+      expect(runner.auto_connect_list.keys).to eq([next_addr])
+      expect(runner.le_pending).to be_empty
+      expect(tracker.auto_connect_add_failed_count - add_err).to eq(1)
+      expect(runner.mgmt).to have_received(:add_device).with(slow_addr, BlueHydra::Mgmt::LE_PUBLIC).once
+      expect(runner.mgmt).to have_received(:add_device).with(next_addr, BlueHydra::Mgmt::LE_RANDOM).once
+    end
+
+    it "scan_phase continues past the timed-out device with no Discovery loop crashed log (19.1)" do
+      stub_const("BlueHydra::Runner::CONNECT_PENDING_LIMIT", 1)
+      runner = runner_with(mgmt_timing_out_on(slow_addr).first)
+      runner.le_pending = { slow_addr => "Public", next_addr => "Public" }
+
+      expect { runner.scan_phase(5) }.not_to raise_error
+
+      expect(runner.auto_connect_list.keys).to eq([next_addr])
+      expect(runner.le_pending).to be_empty
+      expect(BlueHydra.logger).not_to have_received(:error).with(/Discovery loop crashed/)
+      expect(BlueHydra.logger).to have_received(:warn).with(/#{Regexp.escape(slow_addr)} timed out/).once
+    end
+
+    it "a non-success status is still counted add-err and logged at error level (19.2)" do
+      runner = runner_with(fake_mgmt_with_events.first)
+      allow(runner.mgmt).to receive(:add_device).and_return(BlueHydra::Mgmt::STATUS_REJECTED)
+      add_err = tracker.auto_connect_add_failed_count
+
+      runner.add_to_auto_connect(slow_addr, "Public")
+
+      expect(tracker.auto_connect_add_failed_count - add_err).to eq(1)
+      expect(runner.auto_connect_list).to be_empty
+      expect(BlueHydra.logger).to have_received(:error)
+        .with(/mgmt add device failed for #{Regexp.escape(slow_addr)} \(status 0x0b \(REJECTED\)\)/)
+      expect(BlueHydra.logger).not_to have_received(:warn)
+    end
+
+    it "any other exception from add_device still propagates to the discovery loop's handler (19.2)" do
+      runner = runner_with(fake_mgmt_with_events.first)
+      allow(runner.mgmt).to receive(:add_device).and_raise(RuntimeError, "boom")
+      runner.le_pending = { slow_addr => "Public" }
+      add_err = tracker.auto_connect_add_failed_count
+
+      expect { runner.fill_auto_connect }.to raise_error(RuntimeError, "boom")
+
+      expect(tracker.auto_connect_add_failed_count - add_err).to eq(0)
+      expect(runner.auto_connect_list).to be_empty
+      expect(BlueHydra.logger).not_to have_received(:warn)
+    end
+  end
+
   it "scan_with_reset_retry does not reset when the connect succeeds" do
     runner = BlueHydra::Runner.new
     expect(runner).not_to receive(:hci_reset)
@@ -1663,21 +1773,29 @@ end
 #############################################################################
 describe BlueHydra::CliUserInterface do
   # a fuller fake runner exposing everything the UI reaches for
+  #
+  # le_direct_pending is read by render_cui's debug block (the Direct LE line's
+  # queued: value), and render_cui rescues every exception, so a fake runner
+  # without it does not fail but renders nothing past that point and returns
+  # nil. With log_level: debug in the checkout's blue_hydra.yml that silently
+  # failed two examples here. CuiCountersFakeRunner in
+  # cli_user_interface_spec.rb is the same shape.
   class CuiFakeRunner
     attr_accessor :cui_status, :scanner_status, :result_queue,
                   :info_scan_queue, :l2ping_queue, :query_history,
-                  :processing_speed, :stunned, :mgmt
+                  :processing_speed, :stunned, :mgmt, :le_direct_pending
 
     def initialize
-      @cui_status       = {}
-      @scanner_status   = {}
-      @result_queue     = Queue.new
-      @info_scan_queue  = Queue.new
-      @l2ping_queue     = Queue.new
-      @query_history    = {}
-      @processing_speed = 1.0
-      @stunned          = false
-      @mgmt             = nil # matches a real Runner before discovery starts
+      @cui_status        = {}
+      @scanner_status    = {}
+      @result_queue      = Queue.new
+      @info_scan_queue   = Queue.new
+      @l2ping_queue      = Queue.new
+      @query_history     = {}
+      @processing_speed  = 1.0
+      @stunned           = false
+      @mgmt              = nil # matches a real Runner before discovery starts
+      @le_direct_pending = {}  # the direct-connect backlog, empty
     end
   end
 
@@ -1827,6 +1945,37 @@ describe BlueHydra::CliUserInterface do
       cui.render_cui(40, :address, "ascending", printable_keys.dup, :disabled)
     end
     BlueHydra.demo_mode = original
+  end
+
+  # The debug block reads runner.le_direct_pending; a fake runner without it
+  # trips render_cui's rescue, which logs an error and renders nothing, so
+  # this captures stdout rather than silencing it and checks the logger too.
+  it "renders the Direct LE and GATT lines at log_level debug" do
+    original_level = BlueHydra.config["log_level"]
+    original_stdout = $stdout
+    rescued = []
+    allow(BlueHydra.logger).to receive(:error) { |message| rescued << message }
+    runner = CuiFakeRunner.new
+    runner.cui_status["a"] = device_status(address: "AA:BB:CC:DD:EE:38")
+    cui = BlueHydra::CliUserInterface.new(runner)
+    keys = nil
+    screen = nil
+    begin
+      BlueHydra.config["log_level"] = "debug"
+      $stdout = StringIO.new
+      keys   = cui.render_cui(40, :_seen, "ascending", printable_keys.dup, :disabled)
+      screen = $stdout.string
+    ensure
+      $stdout = original_stdout
+      BlueHydra.config["log_level"] = original_level
+    end
+
+    expect(rescued).to eq([])
+    expect(keys).to include(:address)
+    lines = screen.gsub(/\e\[[0-9;]*[A-Za-z]/, "").split("\n")
+    expect(lines.grep(/\ADirect LE: /).size).to eq(1)
+    expect(lines.grep(/\ADirect LE: /).first).to end_with("queued: 0")
+    expect(lines.grep(/\AGATT: /).size).to eq(1)
   end
 
   describe "VERS is labeled from the device's known transport" do

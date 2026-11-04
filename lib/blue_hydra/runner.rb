@@ -29,6 +29,7 @@ module BlueHydra
                   :mgmt,
                   :hci,
                   :le_connect,
+                  :gatt_scanner,
                   :auto_connect_list,
                   :le_pending,
                   :le_direct_pending,
@@ -54,6 +55,22 @@ module BlueHydra
     if ! ::File.executable?(`command -v #{@@command.split[0]} 2> /dev/null`.chomp)
       BlueHydra.logger.fatal("Failed to find: '#{@@command.split[0]}' which is needed for the current setting...")
       exit 1
+    end
+
+    def initialize
+      # The Auto_Connect_Mirror: address => mgmt LE address type for exactly
+      # the addresses in auto_connect_list. auto_connect_list itself belongs to
+      # the discovery thread alone, but the GATT handoff for an auto-connected
+      # Link runs on the Mgmt reader thread (see install_gatt_handoff), which
+      # must find out whether a Device Connected is for an address we added and
+      # with which type. It reads this copy instead. Written only beside the
+      # list's own mutations (add_to_auto_connect, remove_from_auto_connect,
+      # clear_auto_connect, the reset in #start), and only under the mutex for
+      # the hash operation itself - never across a mgmt command - so the
+      # reader's lookup cannot queue behind an Add Device the kernel is slow to
+      # answer.
+      @auto_connect_mirror       = {}
+      @auto_connect_mirror_mutex = Mutex.new
     end
 
     # Start the runner after being initialized
@@ -97,8 +114,9 @@ module BlueHydra
         # keyed by address => {address_type:, added_at:, connected:}. Bounded by
         # CONNECT_PENDING_LIMIT; entries are removed event-driven during the
         # CONNECT phase (Device Disconnected/Connect Failed) or cleared when the
-        # phase ends.
+        # phase ends. The mirror the Mgmt reader consults is emptied with it.
         self.auto_connect_list = {}
+        @auto_connect_mirror_mutex.synchronize { @auto_connect_mirror.clear }
 
         # LE info-scan requests waiting for a slot in the auto-connect list,
         # keyed by address => le_address_type (FIFO, deduped). Requests are held
@@ -125,7 +143,7 @@ module BlueHydra
         # by true IPC sockets at some point but these work prety damn well
         self.raw_queue          = Queue.new # btmon thread   -> chunker thread
         self.chunk_queue        = Queue.new # chunker thread -> parser thread
-        self.result_queue       = Queue.new # parser thread  -> result thread
+        self.result_queue       = Queue.new # parser thread, GATT walk threads -> result thread
         self.info_scan_queue    = Queue.new # result thread  -> discovery thread (classic)
         self.le_info_scan_queue = Queue.new # result thread  -> discovery thread (LE, serviced during discovery)
         self.l2ping_queue       = Queue.new # result thread  -> discovery thread
@@ -317,15 +335,22 @@ module BlueHydra
       @stopping = true
       BlueHydra.logger.info("Runner stopped. Exiting after clearing queue...")
 
-      # Tell the two components that act on their own initiative before anything
-      # else happens, because both outlive this decision. Their reader threads run
-      # until the closes further down, and both react to kernel events by ISSUING
-      # commands - Mgmt re-arms discovery when it sees discovery stop, HciCommand
-      # reads a remote version when it sees a connection complete. The shutdown
-      # reset below generates exactly those events, so left uninformed they spend
-      # the shutdown undoing it.
-      self.mgmt.stopping! if self.mgmt
-      self.hci.stopping!  if self.hci
+      # Tell the three components that act on their own initiative before
+      # anything else happens, because all three outlive this decision. The
+      # Mgmt and HciCommand reader threads run until the closes further down,
+      # and both react to kernel events by ISSUING commands - Mgmt re-arms
+      # discovery when it sees discovery stop, HciCommand reads a remote version
+      # when it sees a connection complete. The shutdown reset below generates
+      # exactly those events, so left uninformed they spend the shutdown undoing
+      # it. The GattScanner's Walk threads outlive the discovery thread too, and
+      # its flag makes them refuse new handoffs (Requirement 14.1), send no
+      # further ATT PDU (14.6) and push no result (14.3) from this point; a
+      # handoff that still arrives - from process_connection_events or a
+      # connect_batch thread - before the discovery thread is joined below is
+      # turned away by the same flag.
+      self.mgmt.stopping!         if self.mgmt
+      self.hci.stopping!          if self.hci
+      self.gatt_scanner.stopping! if self.gatt_scanner
       if self.btmon_thread
         self.btmon_thread.kill # stop this first thread so data stops flowing ...
         # ...then wait for it to actually finish unwinding. Its ensure closes
@@ -348,14 +373,32 @@ module BlueHydra
         # that needs escalating still gets it.
         [self.discovery_thread, self.ubertooth_thread].compact.each(&:kill)
         [self.discovery_thread, self.ubertooth_thread].compact.each { |t| t.join(5) }
+        if self.gatt_scanner
+          # With the discovery thread gone no handoff can follow, so now stop
+          # the Walks it started: close every Att_Bearer, including one whose
+          # connect is still pending, and wait up to 1 s in total for the Walk
+          # threads to exit (Requirements 14.2, 14.4, 14.5). This runs before
+          # the reset below so no ATT traffic is on a Link the power cycle is
+          # about to drop. Threads still running after the budget are logged by
+          # the scanner and left to exit on their own, never killed. Best effort
+          # - a failure here must not keep the reset and the closes from
+          # happening.
+          begin
+            self.gatt_scanner.shutdown
+          rescue => e
+            BlueHydra.logger.error("gatt scanner shutdown failed: #{e.message}")
+          end
+        end
         if self.mgmt
           # Clear anything we left in the kernel (auto-connect list, open
           # connections) with a final reset before closing the control socket.
           # A power-cycle drops the kernel's auto-connect (Add Device) entries
           # so the controller isn't left background-connecting our devices after
-          # we exit. Best effort - never let shutdown hang on it.
+          # we exit. Best effort - never let shutdown hang on it. No
+          # Reset_Deferral: gatt_scanner.shutdown has just closed every bearer,
+          # so there is no Walk to wait for (Requirement 14.2).
           begin
-            hci_reset
+            hci_reset(defer_for_walks: false)
           rescue => e
             BlueHydra.logger.error("mgmt reset on shutdown failed: #{e.message}")
           end
@@ -429,7 +472,7 @@ module BlueHydra
         begin
           # spawn the handler for btmon and pass in the shared raw queue as a
           # param so that it can feed data back into the runner threads
-          spawner = BlueHydra::BtmonHandler.new(
+          BlueHydra::BtmonHandler.new(
             self.command,
             self.raw_queue
           )
@@ -741,11 +784,34 @@ module BlueHydra
     # Add one LE device to the kernel auto-connect list (mgmt Add Device,
     # auto-connect action) and record it. Capacity is the caller's
     # responsibility (see fill_auto_connect); this just performs the add.
+    #
+    # A Timeout::Error from add_device is counted as an add failure and
+    # swallowed here rather than left to the discovery loop's generic rescue.
+    # The kernel serialises Add Device behind an in-flight LE create-connection,
+    # so with a connection attempt pending (longer still when a GATT walk holds
+    # a link) the reply can arrive after Mgmt::DEFAULT_TIMEOUT. On device that
+    # propagated out of scan_phase as "Discovery loop crashed: mgmt: timed out
+    # awaiting reply to opcode 0x0033" and cost a 20s sleep plus a restart of the
+    # cycle for one slow device. The address is not re-queued: like a
+    # non-success status it is re-requested on the next info_scan_rate cycle.
+    # Any other exception still reaches the discovery loop's handler.
     def add_to_auto_connect(address, le_address_type)
       addr_type = mgmt_le_address_type(le_address_type)
-      status    = mgmt.add_device(address, addr_type)
+      begin
+        status = mgmt.add_device(address, addr_type)
+      rescue Timeout::Error
+        BlueHydra::CliUserInterfaceTracker.increment_auto_connect_add_failed_count
+        BlueHydra.logger.warn(
+          "mgmt add device for #{address} timed out after " \
+          "#{BlueHydra::Mgmt::DEFAULT_TIMEOUT}s awaiting the kernel's reply; skipping it this cycle"
+        )
+        return
+      end
       if status == BlueHydra::Mgmt::STATUS_SUCCESS
         self.auto_connect_list[address] = { address_type: addr_type, added_at: Time.now, connected: false }
+        # Mirror written after the mgmt reply, under the mutex for the store
+        # only, so the reader thread's lookup never waits on add_device.
+        @auto_connect_mirror_mutex.synchronize { @auto_connect_mirror[address] = addr_type }
         BlueHydra::CliUserInterfaceTracker.increment_auto_connect_added_count
       else
         # a mgmt-level add failure is logged and not re-queued (it would be
@@ -773,8 +839,12 @@ module BlueHydra
     # NOT clear it, and nothing will retry the removal later. To keep a transient
     # failure from leaking a slot we retry once here, then give up and log loudly
     # (a persistent leak eventually starves AUTO_CONNECT_LIMIT).
+    #
+    # The mirror entry goes with the list entry, before the mgmt Remove Device,
+    # so the two never disagree while this thread is blocked on the reply.
     def remove_from_auto_connect(address)
       entry = self.auto_connect_list.delete(address)
+      @auto_connect_mirror_mutex.synchronize { @auto_connect_mirror.delete(address) }
       return unless entry
 
       status = mgmt.remove_device(address, entry[:address_type])
@@ -806,6 +876,16 @@ module BlueHydra
     # auto_connect_list). Disconnect/failed remove the device immediately -
     # faster than any timer (Req 3.5); connected marks the entry connected and
     # keeps it pending; events for addresses we are not tracking are ignored.
+    #
+    # No GATT handoff happens here. The Mgmt reader thread already handed the
+    # Link to the scanner as it dispatched the Device Connected (see
+    # install_gatt_handoff), because this pass can run seconds later: the
+    # discovery thread sits in synchronous mgmt commands between drains, and an
+    # Add Device the kernel serialised behind an in-flight LE connect was
+    # measured blocking it for 4.5 s on device - past the 2 s HCI_DISCONN_TIMEOUT
+    # an unheld LE Link survives. Handing off here as well would walk the same
+    # Link twice for one event. The counter and the success record stay here,
+    # on this thread, where a scanner fault on the reader cannot reach them.
     def process_connection_events
       return unless mgmt
       loop do
@@ -865,6 +945,9 @@ module BlueHydra
         end
       end
       self.auto_connect_list.keys.each { |address| remove_from_auto_connect(address) }
+      # Each removal above already took its mirror entry with it; this makes
+      # "list empty => mirror empty" hold unconditionally at the phase boundary.
+      @auto_connect_mirror_mutex.synchronize { @auto_connect_mirror.clear }
     end
 
     # DIRECT-CONNECT phase: reach the LE devices mgmt Add Device cannot accept
@@ -1041,10 +1124,14 @@ module BlueHydra
     end
 
     # Fold one batch's outcomes into the counters. A raised link is the win
-    # condition (HciCommand reads the version off it); unreachable, error and
-    # abandoned-at-the-deadline are all just "no version this time". Abandoned is
-    # counted separately because a rising abandoned count means the budget is the
-    # binding constraint, which is a different problem from devices not answering.
+    # condition (HciCommand reads the version off it); unreachable, error,
+    # conn_limit and abandoned-at-the-deadline are all just "no version this
+    # time". Abandoned is counted separately because a rising abandoned count
+    # means the budget is the binding constraint, which is a different problem
+    # from devices not answering. Conn_limit is counted separately because it
+    # means the local controller is out of LE connection slots - the GATT Walks
+    # hold Links open past our own hold - which is a tuning problem
+    # (gatt_walk_parallel), not a device problem.
     def record_le_direct_results(results)
       results.each do |address, outcome|
         case outcome
@@ -1057,6 +1144,14 @@ module BlueHydra
           # which is no evidence about the device. Striking here would write off
           # devices for being unlucky about batch ordering.
           BlueHydra.logger.debug("le_connect: #{address} -> abandoned at deadline")
+        when :conn_limit
+          BlueHydra::CliUserInterfaceTracker.increment_le_direct_conn_limit_count
+          # deliberately NOT a strike: EMLINK is the kernel's translation of HCI
+          # 0x09 Connection Limit Exceeded (see LeConnect::CONN_LIMIT_ERRORS),
+          # which is the LOCAL controller refusing because it has no slot left.
+          # We never got as far as asking the device, so this is no evidence
+          # about it; striking would write off devices for the Walks' held Links.
+          BlueHydra.logger.debug("le_connect: #{address} -> conn_limit (controller connection limit)")
         when :error
           # Kept apart from unreachable deliberately. An error is a local socket
           # problem - we never got to ask the device - whereas unreachable means
@@ -1101,7 +1196,22 @@ module BlueHydra
     # is not ready, BlueHydra::Mgmt attempts rfkill recovery internally and, if
     # that fails, raises BluezNotReadyError for start_discovery_thread to
     # escalate.
-    def hci_reset
+    #
+    # Powering off drops every Link, and with it every GATT Walk in flight, so
+    # with defer_for_walks (the default) the reset first waits for the walks to
+    # end - the Reset_Deferral, bounded by gatt_walk_timeout (Requirement 3.9).
+    # The wait lives here rather than at the call sites so the cycle-start
+    # reset in run_mgmt_discovery, the pre-classic-drain reset and
+    # scan_with_reset_retry are all covered by one edit and a future caller
+    # cannot forget it. Only the shutdown reset in #stop passes false: by then
+    # gatt_scanner.shutdown has closed every bearer and there is nothing left
+    # to wait for (Requirement 14.2). Nothing about the mgmt sequence changes:
+    # the wait issues no command, so Set Powered off is still the first thing
+    # on the wire, and with gatt_scan off gatt_scanner is nil and this is the
+    # pre-feature sequence byte for byte (Requirement 1.9).
+    def hci_reset(defer_for_walks: true)
+      defer_reset_for_walks if defer_for_walks && gatt_scanner
+
       status = mgmt.set_powered(false)
       BlueHydra.logger.error("mgmt power off failed (status #{BlueHydra::Mgmt.status_label(status)})") unless status == BlueHydra::Mgmt::STATUS_SUCCESS
 
@@ -1141,11 +1251,37 @@ module BlueHydra
           # subprocess). Reused for every l2ping-queue entry this thread drains.
           l2ping_probe = BlueHydra::L2Ping.new(mgmt_index, connect_timeout: L2CAP_CONNECT_TIMEOUT)
 
+          # GATT walks over the LE links the two connect paths raise. Built
+          # only when gatt_scan is on; left nil otherwise so the handoffs here
+          # and in LeConnect are no-ops, the CUI renders zero counters and
+          # hci_reset adds no wait. The walkers ask link_up? before every
+          # bearer connect, because an L2CAP connect with no Link up CREATES one
+          # (l2cap_chan_connect -> hci_connect_le_scan) - radio activity this
+          # feature must not add. Routed through the accessor rather than
+          # capturing the Mgmt instance so it follows whatever mgmt the runner
+          # holds (Mgmt reopens its socket in place; self.mgmt is assigned once).
+          if BlueHydra.config["gatt_scan"]
+            self.gatt_scanner = BlueHydra::GattScanner.new(
+              hci_index:    mgmt_index,
+              result_queue: self.result_queue,
+              link_up:      ->(address) { self.mgmt.link_up?(address) }
+            )
+          end
+
+          # The Auto_Connect_Path handoff, off the Mgmt reader thread. Installed
+          # here, where both mgmt and the scanner exist; a no-op (nothing set on
+          # mgmt) when the scanner was not built, so with gatt_scan off the
+          # reader's connection-event handling is the pre-feature one.
+          install_gatt_handoff
+
           # Direct LE connects for private-address devices, which mgmt Add Device
           # rejects outright. Held on the runner because the DIRECT-CONNECT phase
-          # runs out of run_mgmt_discovery rather than inline here.
+          # runs out of run_mgmt_discovery rather than inline here. Given the
+          # scanner so its own :connected outcomes are walked too (nil when
+          # gatt_scan is off).
           self.le_connect = BlueHydra::LeConnect.new(
-            mgmt_index, connect_timeout: L2CAP_CONNECT_TIMEOUT
+            mgmt_index, connect_timeout: L2CAP_CONNECT_TIMEOUT,
+            gatt_scanner: self.gatt_scanner
           )
 
           # Turn on every transport the controller supports but has switched off,
@@ -1840,7 +1976,21 @@ module BlueHydra
                 end
               end
 
-              if result[:address]
+              # Two shapes travel on this queue. A GATT Walk result (the hash
+              # GattScanner#walk_result pushes, tagged gatt_walk: true) is
+              # checked for first because it also carries :address and would
+              # otherwise fall into the advertisement branch: its address is a
+              # String not an Array, Device may return nil for it (no record to
+              # update, Requirement 11.14), and nothing below applies to it -
+              # it says nothing about connectability and a Walk ran over a Link
+              # this device already had, so queueing it for another info scan
+              # would be circular. Stunning does not apply either: the scanner
+              # pushes regardless of the flag (11.1) and this loop pops every
+              # entry, so a Walk result is never shed here.
+              if result[:gatt_walk]
+                apply_gatt_walk_result(result)
+
+              elsif result[:address]
                 device = BlueHydra::Device.update_or_create_from_result(result)
 
                 # Record what this advertisement said about connectability for the
@@ -1920,6 +2070,103 @@ module BlueHydra
         end
       end
 
+    end
+
+    private
+
+    # Install the Auto_Connect_Path handoff on the Mgmt reader. Only when a
+    # scanner was built: with gatt_scan off nothing is set and mgmt keeps its
+    # nil default, so the reader's Device Connected handling is byte for byte
+    # what it was before the feature (Requirement 2.13).
+    #
+    # The callback runs ON THE READER THREAD, as the Device Connected is
+    # dispatched - before the discovery thread can have drained it from
+    # connection_events, and whatever that thread is blocked in at the time.
+    # That is the point: an unheld auto-connected LE Link lives 2 s
+    # (HCI_DISCONN_TIMEOUT) and the discovery thread's next drain can be
+    # further away than that (an Add Device measured at 4.5 s on device). The
+    # reader must not block and must not issue a mgmt command (it is what
+    # delivers command replies), so this does one mutex-guarded hash lookup
+    # and, for a tracked address, handoff_to_gatt, which only does bookkeeping
+    # and a Thread.new. An address not in the mirror - a BR/EDR connection, a
+    # Link the direct-connect path raised itself, anything we did not Add
+    # Device - returns with no handoff (Requirements 2.6, 2.7). The lookup
+    # also fetches the mgmt LE address type recorded at Add Device, which the
+    # scanner needs and the event does not carry in the form it wants.
+    def install_gatt_handoff
+      return unless gatt_scanner
+
+      mgmt.on_device_connected = lambda do |address|
+        address_type = @auto_connect_mirror_mutex.synchronize { @auto_connect_mirror[address] }
+        handoff_to_gatt(address, address_type, :auto) if address_type
+      end
+    end
+
+    # Hand a raised auto-connect Link to the GATT scanner. Called on the Mgmt
+    # reader thread from the on_device_connected callback above. Best effort,
+    # same shape as LeConnect#handoff_to_gatt: a nil scanner (gatt_scan off)
+    # is a no-op and a scanner that raises is logged here and swallowed, so a
+    # scanner fault costs one error line and the reader goes on dispatching
+    # (Mgmt#notify_device_connected has its own rescue behind this one, but
+    # catching it here keeps the log line the same as the direct path's). The
+    # scanner itself only does bookkeeping and a Thread.new, so this returns in
+    # microseconds and never holds the reader on a Walk.
+    def handoff_to_gatt(address, address_type, source)
+      scanner = gatt_scanner
+      return unless scanner
+      scanner.handoff(address, address_type, source: source)
+    rescue => e
+      BlueHydra.logger.error("gatt: handoff for #{address} raised #{e.class}: #{e.message}")
+    end
+
+    # Write one GATT Walk result to the Device record, on the result thread,
+    # which stays the only writer of the Gatt_Columns (Requirement 11.2).
+    # Device.update_or_create_from_result sees the gatt_walk tag and routes to
+    # Device.apply_gatt_result, which returns the record or nil when no record
+    # has the address; neither is acted on here.
+    #
+    # Rescued so a single bad result cannot end the thread. apply_gatt_result
+    # raises ArgumentError for a result outside its contract - an outcome not
+    # in GattScanner::OUTCOMES_WITH_RESULT, or a characteristic entry outside
+    # GattCharacteristics' schema - which is a fault in the walker or scanner
+    # that built the hash, not in this device's data or anyone else's. Letting
+    # it reach the loop's outer rescue would stop every device's processing for
+    # the rest of the run over one Walk, so it is logged here at error with the
+    # address and backtrace and the loop moves on to the next result. The
+    # requirements say nothing about this case; the steering rule that
+    # best-effort paths degrade rather than raise decides it, the same way
+    # Device.stored_gatt_list treats an unreadable stored column.
+    def apply_gatt_walk_result(result)
+      BlueHydra::Device.update_or_create_from_result(result)
+    rescue => e
+      BlueHydra.logger.error("gatt: #{result[:address]} Walk result not applied, #{e.class}: #{e.message}")
+      e.backtrace.each { |line| BlueHydra.logger.error(line) }
+    end
+
+    # The Reset_Deferral (Requirements 3.9 to 3.12): block the discovery thread
+    # until no GATT Walk is in flight or gatt_walk_timeout has passed, whichever
+    # comes first, so a controller power cycle does not cut walks short when a
+    # short wait would have let them finish. Called by hci_reset before Set
+    # Powered off; never on the shutdown path.
+    #
+    # Issues no mgmt command. Discovery stays exactly as the preceding phase
+    # left it - there is no Stop Discovery here or anywhere in hci_reset - so
+    # the wait is scanning time, not a scan gap (3.10). The scanner's
+    # wait_for_idle returns [0, 0.0] at once when nothing is in flight, moving
+    # no counter and logging nothing, which is the no-added-wait case (3.12);
+    # otherwise it increments reset-deferred and logs its own waited_ms line
+    # (3.13). When the cap hits with walks still running this adds the Runner's
+    # line naming the count and the wait (3.11); those walks end disconnected
+    # when the power cycle drops their Links and keep their Resume_State.
+    def defer_reset_for_walks
+      in_flight, waited = gatt_scanner.wait_for_idle(BlueHydra.config["gatt_walk_timeout"])
+      return if waited.zero?
+
+      if in_flight > 0
+        BlueHydra.logger.debug(
+          format("gatt: reset after %.2fs wait with %d walk(s) still in flight", waited, in_flight)
+        )
+      end
     end
   end
 end
