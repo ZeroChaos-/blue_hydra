@@ -35,6 +35,9 @@ build/
 .rvmrc
 
 *.log
+# the one capture the spec suite replays (spec/gatt_pipeline_replay_spec.rb);
+# the other spec/fixtures/btmon_raw_*.log captures stay local
+!/spec/fixtures/btmon_gatt_walk.log
 *.db
 Gemfile.lock
 blue_hydra.json

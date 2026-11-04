@@ -1,0 +1,2541 @@
+> HCI Event: LE Meta Event (0x3e) plen 54                                                                                                #8242 2026-10-29 17:48:17.662194
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x0013
+            Props: 0x0013
+              Connectable
+              Scannable
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: ADV_IND (0x0013)
+          Address type: Public (0x00)
+          Address: 02:00:03:00:00:13 (OUI 02-00-03)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -81 dBm (0xaf)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x1c
+        02 01 06 03 02 f0 ab 11 09 44 45 56 49 43 45 2d  .........DEVICE-
+        41 30 30 30 30 30 30 30 31 02 0a 03              A00000001...    
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        16-bit Service UUIDs (partial): 1 entry
+          Unknown (0xabf0)
+        Name (complete): DEVICE-A00000001
+        TX power: 3 dBm
+< HCI Command: LE Set Extended Scan Enable (0x08|0x0042) plen 6                                                                          #8243 2026-10-29 17:48:17.662456
+        Extended scan: Disabled (0x00)
+        Filter duplicates: Disabled (0x00)
+        Duration: 0 msec (0x0000)
+        Period: 0.00 sec (0x0000)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8244 2026-10-29 17:48:17.668170
+      LE Set Extended Scan Enable (0x08|0x0042) ncmd 2
+        Status: Success (0x00)
+@ MGMT Event: Device Found (0x0012) plen 42                                                                                           {0x0001} 2026-10-29 17:48:17.668288
+        LE Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        RSSI: -81 dBm (0xaf)
+        Flags: 0x00000000
+        Data length: 28
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        16-bit Service UUIDs (partial): 1 entry
+          Unknown (0xabf0)
+        Name (complete): DEVICE-A00000001
+        TX power: 3 dBm
+@ MGMT Event: Discovering (0x0013) plen 2                                                                                             {0x0001} 2026-10-29 17:48:17.668299
+        Address type: 0x07
+          BR/EDR
+          LE Public
+          LE Random
+        Discovery: Disabled (0x00)
+< HCI Command: LE Extended Create Connection (0x08|0x0043) plen 26                                                                       #8245 2026-10-29 17:48:17.668474
+        Filter policy: Accept list is not used (0x00)
+        Own address type: Public (0x00)
+        Peer address type: Public (0x00)
+        Peer address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Initiating PHYs: 0x01
+        Entry 0: LE 1M
+          Scan interval: 60.000 msec (0x0060)
+          Scan window: 60.000 msec (0x0060)
+          Min connection interval: 30.00 msec (0x0018)
+          Max connection interval: 50.00 msec (0x0028)
+          Connection latency: 0 (0x0000)
+          Supervision timeout: 420 msec (0x002a)
+          Min connection length: 0.000 msec (0x0000)
+          Max connection length: 0.000 msec (0x0000)
+bundle[54160]: @ MGMT Command: Start Discovery (0x0023) plen 1                                                                        {0x0001} 2026-10-29 17:48:17.668993
+        Address type: 0x07
+          BR/EDR
+          LE Public
+          LE Random
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8246 2026-10-29 17:48:17.670142
+      LE Extended Create Connection (0x08|0x0043) ncmd 2
+        Status: Success (0x00)
+> HCI Event: LE Meta Event (0x3e) plen 31                                                                                                #8247 2026-10-29 17:48:17.784322
+      LE Enhanced Connection Complete (0x0a)
+        Status: Success (0x00)
+        Handle: 2048
+        Role: Central (0x00)
+        Peer address type: Public (0x00)
+        Peer address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Local resolvable private address: 00:00:00:00:00:00 (Non-Resolvable)
+        Peer resolvable private address: 00:00:00:00:00:00 (Non-Resolvable)
+        Connection interval: 45.00 msec (0x0024)
+        Connection latency: 0 (0x0000)
+        Supervision timeout: 420 msec (0x002a)
+        Central clock accuracy: 0x00
+@ MGMT Event: Device Connected (0x000b) plen 41                                                                                       {0x0001} 2026-10-29 17:48:17.784522
+        LE Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Flags: 0x00000008
+          Connection Locally Initiated
+        Data length: 28
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        16-bit Service UUIDs (partial): 1 entry
+          Unknown (0xabf0)
+        Name (complete): DEVICE-A00000001
+        TX power: 3 dBm
+> HCI Event: LE Meta Event (0x3e) plen 4                                                                                                 #8248 2026-10-29 17:48:17.785096
+      LE Channel Selection Algorithm (0x14)
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Algorithm: #1 (0x00)
+[672192]: < HCI Command: Read Remote Version Information (0x01|0x001d) plen 2                                                            #8249 2026-10-29 17:48:17.790563
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8250 2026-10-29 17:48:17.791124
+      Read Remote Version Information (0x01|0x001d) ncmd 1
+        Status: Success (0x00)
+< HCI Command: LE Set Random Address (0x08|0x0005) plen 6                                                                                #8251 2026-10-29 17:48:17.791170
+        Address: 32:00:00:00:00:19 (Non-Resolvable)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8252 2026-10-29 17:48:17.792139
+      LE Set Random Address (0x08|0x0005) ncmd 1
+        Status: Success (0x00)
+< HCI Command: LE Set Extended Scan Parameters (0x08|0x0041) plen 13                                                                     #8253 2026-10-29 17:48:17.792202
+        Own address type: Random (0x01)
+        Filter policy: Accept all advertisement (0x00)
+        PHYs: 0x05
+        Entry 0: LE 1M
+          Type: Active (0x01)
+          Interval: 22.500 msec (0x0024)
+          Window: 11.250 msec (0x0012)
+        Entry 1: LE Coded
+          Type: Active (0x01)
+          Interval: 67.500 msec (0x006c)
+          Window: 33.750 msec (0x0036)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8254 2026-10-29 17:48:17.793130
+      LE Set Extended Scan Parameters (0x08|0x0041) ncmd 1
+        Status: Success (0x00)
+< HCI Command: LE Set Extended Scan Enable (0x08|0x0042) plen 6                                                                          #8255 2026-10-29 17:48:17.793255
+        Extended scan: Enabled (0x01)
+        Filter duplicates: Enabled (0x01)
+        Duration: 0 msec (0x0000)
+        Period: 0.00 sec (0x0000)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8256 2026-10-29 17:48:17.795104
+      LE Set Extended Scan Enable (0x08|0x0042) ncmd 2
+        Status: Success (0x00)
+@ MGMT Event: Discovering (0x0013) plen 2                                                                                             {0x0001} 2026-10-29 17:48:17.795224
+        Address type: 0x07
+          BR/EDR
+          LE Public
+          LE Random
+        Discovery: Enabled (0x01)
+@ MGMT Event: Command Complete (0x0001) plen 4                                                                                        {0x0001} 2026-10-29 17:48:17.795239
+      Start Discovery (0x0023) plen 1
+        Status: Success (0x00)
+        Address type: 0x07
+          BR/EDR
+          LE Public
+          LE Random
+< HCI Command: LE Read Remote Used Features (0x08|0x0016) plen 2                                                                         #8257 2026-10-29 17:48:17.795258
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8258 2026-10-29 17:48:17.796138
+      LE Read Remote Used Features (0x08|0x0016) ncmd 1
+        Status: Success (0x00)
+> HCI Event: LE Meta Event (0x3e) plen 43                                                                                                #8259 2026-10-29 17:48:17.825169
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x0013
+            Props: 0x0013
+              Connectable
+              Scannable
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: ADV_IND (0x0013)
+          Address type: Public (0x00)
+          Address: 02:00:02:00:00:12 (OUI 02-00-02)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -78 dBm (0xb2)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x11
+        02 01 00 0d 09 44 45 56 49 43 45 2d 43 30 30 30  .....DEVICE-C000
+        31                                               1               
+        Flags: 0x00
+        Name (complete): DEVICE-C0001
+> HCI Event: LE Meta Event (0x3e) plen 49                                                                                                #8260 2026-10-29 17:48:17.826148
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x001b
+            Props: 0x001b
+              Connectable
+              Scannable
+              Scan response
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: SCAN_RSP to an ADV_SCAN_IND (0x001b)
+          Address type: Public (0x00)
+          Address: 02:00:02:00:00:12 (OUI 02-00-02)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -78 dBm (0xb2)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x17
+        16 16 fd df 01 df 20 01 ff ff 7c f0 01 75 59 01  ...... ...|..uY.
+        03 00 00 10 00 ff ff                             .......         
+        Service Data: Unknown (0xdffd)
+          Data[19]: 01df2001ffff7cf0017559010300001000ffff
+@ MGMT Event: Device Found (0x0012) plen 54                                                                                           {0x0001} 2026-10-29 17:48:17.826256
+        LE Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        RSSI: -78 dBm (0xb2)
+        Flags: 0x00000000
+        Data length: 40
+        Flags: 0x00
+        Name (complete): DEVICE-C0001
+        Service Data: Unknown (0xdffd)
+          Data[19]: 01df2001ffff7cf0017559010300001000ffff
+> HCI Event: LE Meta Event (0x3e) plen 57                                                                                                #8261 2026-10-29 17:48:17.830173
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x0013
+            Props: 0x0013
+              Connectable
+              Scannable
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: ADV_IND (0x0013)
+          Address type: Public (0x00)
+          Address: 02:00:01:00:00:11 (OUI 02-00-01)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -56 dBm (0xc8)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x1f
+        02 01 06 1b ff 06 0f 00 40 0a 00 80 68 87 42 56  ........@...h.BV
+        02 84 fd 06 da 6a 30 4b 54 f5 07 de 6f 15 a8     .....j0KT...o.. 
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: not assigned (3846)
+          Data[24]: 00400a0080688742560284fd06da6a304b54f507de6f15a8
+> HCI Event: LE Meta Event (0x3e) plen 43                                                                                                #8262 2026-10-29 17:48:17.831153
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x001b
+            Props: 0x001b
+              Connectable
+              Scannable
+              Scan response
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: SCAN_RSP to an ADV_SCAN_IND (0x001b)
+          Address type: Public (0x00)
+          Address: 02:00:01:00:00:11 (OUI 02-00-01)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -56 dBm (0xc8)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x11
+        10 09 44 45 56 49 43 45 2d 42 30 30 30 30 30 30  ..DEVICE-B000000
+        32                                               2               
+        Name (complete): DEVICE-B0000002
+@ MGMT Event: Device Found (0x0012) plen 62                                                                                           {0x0001} 2026-10-29 17:48:17.831167
+        LE Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        RSSI: -56 dBm (0xc8)
+        Flags: 0x00000000
+        Data length: 48
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: not assigned (3846)
+          Data[24]: 00400a0080688742560284fd06da6a304b54f507de6f15a8
+        Name (complete): DEVICE-B0000002
+> HCI Event: Read Remote Version Complete (0x0c) plen 8                                                                                  #8263 2026-10-29 17:48:17.886303
+        Status: Success (0x00)
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        LMP version: Bluetooth 4.2 (0x08) - Subversion 782 (0x030e)
+        Manufacturer: RivieraWaves S.A.S (96)
+> HCI Event: LE Meta Event (0x3e) plen 12                                                                                                #8264 2026-10-29 17:48:18.110213
+      LE Read Remote Used Features (0x04)
+        Status: Success (0x00)
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Features[0/0][8]: ff00000000000000
+          LE Encryption
+          Connection Parameter Request Procedure
+          Extended Reject Indication
+          Peripheral-initiated Features Exchange
+          LE Ping
+          LE Data Packet Length Extension
+          LL Privacy
+          Extended Scanner Filter Policies
+< HCI Command: LE Set Extended Scan Enable (0x08|0x0042) plen 6                                                                          #8265 2026-10-29 17:48:18.110678
+        Extended scan: Disabled (0x00)
+        Filter duplicates: Disabled (0x00)
+        Duration: 0 msec (0x0000)
+        Period: 0.00 sec (0x0000)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8266 2026-10-29 17:48:18.113154
+      LE Set Extended Scan Enable (0x08|0x0042) ncmd 2
+        Status: Success (0x00)
+@ MGMT Event: Discovering (0x0013) plen 2                                                                                             {0x0001} 2026-10-29 17:48:18.113280
+        Address type: 0x07
+          BR/EDR
+          LE Public
+          LE Random
+        Discovery: Disabled (0x00)
+< HCI Command: LE Extended Create Connection (0x08|0x0043) plen 26                                                                       #8267 2026-10-29 17:48:18.113515
+        Filter policy: Accept list is not used (0x00)
+        Own address type: Public (0x00)
+        Peer address type: Public (0x00)
+        Peer address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Initiating PHYs: 0x01
+        Entry 0: LE 1M
+          Scan interval: 60.000 msec (0x0060)
+          Scan window: 60.000 msec (0x0060)
+          Min connection interval: 30.00 msec (0x0018)
+          Max connection interval: 50.00 msec (0x0028)
+          Connection latency: 0 (0x0000)
+          Supervision timeout: 420 msec (0x002a)
+          Min connection length: 0.000 msec (0x0000)
+          Max connection length: 0.000 msec (0x0000)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8268 2026-10-29 17:48:18.115147
+      LE Extended Create Connection (0x08|0x0043) ncmd 2
+        Status: Success (0x00)
+[672192]: < ACL Data TX: Handle 2048 [1/6] flags 0x00 dlen 7                                                                             #8269 2026-10-29 17:48:18.420168
+      ATT: Exchange MTU Request (0x02) len 2
+        Client RX MTU: 517
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8270 2026-10-29 17:48:18.426073
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 0/6
+        #8269: len 7 (11 Kb/s)
+        Latency: 5 msec (5-5 msec ~5 msec)
+> HCI Event: LE Meta Event (0x3e) plen 11                                                                                                #8271 2026-10-29 17:48:18.516181
+      LE Data Length Change (0x07)
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Max TX octets: 251
+        Max TX time: 2120
+        Max RX octets: 251
+        Max RX time: 2120
+> ACL Data RX: Handle 2048 flags 0x02 dlen 7                                                                                             #8272 2026-10-29 17:48:18.517451
+      ATT: Exchange MTU Response (0x03) len 2
+        Server RX MTU: 256
+[672192]: < ACL Data TX: Handle 2048 [1/6] flags 0x00 dlen 11                                                                            #8273 2026-10-29 17:48:18.517983
+      ATT: Read By Group Type Request (0x10) len 6
+        Handle range: 0x0001-0xffff
+        Attribute group type: Primary Service (0x2800)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8274 2026-10-29 17:48:18.650308
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 0/6
+        #8273: len 11 (0 Kb/s)
+        Latency: 132 msec (5-132 msec ~69 msec)
+> ACL Data RX: Handle 2048 flags 0x02 dlen 24                                                                                            #8275 2026-10-29 17:48:18.741567
+      ATT: Read By Group Type Response (0x11) len 19
+        Attribute data length: 6
+        Attribute group list: 3 entries
+        Handle range: 0x0001-0x0005
+        UUID: Generic Access Profile (0x1800)
+        Handle range: 0x0006-0x000d
+        UUID: Generic Attribute Profile (0x1801)
+        Handle range: 0x000e-0xffff
+        UUID: Unknown (0xabf0)
+[672192]: < ACL Data TX: Handle 2048 [1/6] flags 0x00 dlen 11                                                                            #8276 2026-10-29 17:48:18.741767
+      ATT: Read By Group Type Request (0x10) len 6
+        Handle range: 0x0001-0xffff
+        Attribute group type: Secondary Service (0x2801)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8277 2026-10-29 17:48:18.785208
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 0/6
+        #8276: len 11 (2 Kb/s)
+        Latency: 43 msec (5-132 msec ~56 msec)
+> HCI Event: LE Meta Event (0x3e) plen 31                                                                                                #8278 2026-10-29 17:48:19.098077
+      LE Enhanced Connection Complete (0x0a)
+        Status: Success (0x00)
+        Handle: 2049
+        Role: Central (0x00)
+        Peer address type: Public (0x00)
+        Peer address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Local resolvable private address: 00:00:00:00:00:00 (Non-Resolvable)
+        Peer resolvable private address: 00:00:00:00:00:00 (Non-Resolvable)
+        Connection interval: 45.00 msec (0x0024)
+        Connection latency: 0 (0x0000)
+        Supervision timeout: 420 msec (0x002a)
+        Central clock accuracy: 0x00
+@ MGMT Event: Device Connected (0x000b) plen 30                                                                                       {0x0001} 2026-10-29 17:48:19.098238
+        LE Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Flags: 0x00000008
+          Connection Locally Initiated
+        Data length: 17
+        Flags: 0x00
+        Name (complete): DEVICE-C0001
+> HCI Event: LE Meta Event (0x3e) plen 4                                                                                                 #8279 2026-10-29 17:48:19.099044
+      LE Channel Selection Algorithm (0x14)
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Algorithm: #2 (0x01)
+> ACL Data RX: Handle 2048 flags 0x02 dlen 9                                                                                             #8280 2026-10-29 17:48:19.101431
+      ATT: Error Response (0x01) len 4
+        Read By Group Type Request (0x10)
+        Handle: 0x0001
+        Error: Attribute Not Found (0x0a)
+[672192]: < HCI Command: Read Remote Version Information (0x01|0x001d) plen 2                                                            #8281 2026-10-29 17:48:19.108548
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+[672192]: < ACL Data TX: Handle 2048 [1/6] flags 0x00 dlen 11                                                                            #8282 2026-10-29 17:48:19.108800
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0001-0x0005
+        Attribute type: Include (0x2802)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8283 2026-10-29 17:48:19.109010
+      Read Remote Version Information (0x01|0x001d) ncmd 1
+        Status: Success (0x00)
+< HCI Command: LE Extended Create Connection (0x08|0x0043) plen 26                                                                       #8284 2026-10-29 17:48:19.109028
+        Filter policy: Accept list is not used (0x00)
+        Own address type: Public (0x00)
+        Peer address type: Public (0x00)
+        Peer address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Initiating PHYs: 0x01
+        Entry 0: LE 1M
+          Scan interval: 60.000 msec (0x0060)
+          Scan window: 60.000 msec (0x0060)
+          Min connection interval: 30.00 msec (0x0018)
+          Max connection interval: 50.00 msec (0x0028)
+          Connection latency: 0 (0x0000)
+          Supervision timeout: 420 msec (0x002a)
+          Min connection length: 0.000 msec (0x0000)
+          Max connection length: 0.000 msec (0x0000)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8285 2026-10-29 17:48:19.111061
+      LE Extended Create Connection (0x08|0x0043) ncmd 2
+        Status: Success (0x00)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8286 2026-10-29 17:48:19.145026
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 0/6
+        #8282: len 11 (2 Kb/s)
+        Latency: 36 msec (5-132 msec ~46 msec)
+> HCI Event: Read Remote Version Complete (0x0c) plen 8                                                                                  #8287 2026-10-29 17:48:19.195179
+        Status: Success (0x00)
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        LMP version: Bluetooth 5.2 (0x0b) - Subversion 9221 (0x2405)
+        Manufacturer: MediaTek, Inc. (70)
+> ACL Data RX: Handle 2048 flags 0x02 dlen 9                                                                                             #8288 2026-10-29 17:48:19.236590
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x0001
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2048 [1/6] flags 0x00 dlen 11                                                                            #8289 2026-10-29 17:48:19.237173
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0001-0x0005
+        Attribute type: Characteristic (0x2803)
+> HCI Event: LE Meta Event (0x3e) plen 11                                                                                                #8290 2026-10-29 17:48:19.241089
+      LE Data Length Change (0x07)
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Max TX octets: 251
+        Max TX time: 965
+        Max RX octets: 27
+        Max RX time: 328
+> ACL Data RX: Handle 2049 flags 0x02 dlen 11                                                                                            #8291 2026-10-29 17:48:19.333576
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0001-0xffff
+        Attribute type: Server Supported Features (0x2b3a)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8292 2026-10-29 17:48:19.370122
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 0/6
+        #8289: len 11 (0 Kb/s)
+        Latency: 132 msec (5-132 msec ~89 msec)
+> ACL Data RX: Handle 2048 flags 0x02 dlen 20                                                                                            #8293 2026-10-29 17:48:19.551605
+      ATT: Read By Type Response (0x09) len 15
+        Attribute data length: 7
+        Attribute data list: 2 entries
+        Handle: 0x0002
+        Value[5]: 020300002a
+            Properties: 0x02
+              Read (0x02)
+            Value Handle: 0x0003
+            Value UUID: Device Name (0x2a00)
+        Handle: 0x0004
+        Value[5]: 020500012a
+            Properties: 0x02
+              Read (0x02)
+            Value Handle: 0x0005
+            Value UUID: Appearance (0x2a01)
+[672192]: < ACL Data TX: Handle 2048 [1/6] flags 0x00 dlen 11                                                                            #8294 2026-10-29 17:48:19.552366
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0005-0x0005
+        Attribute type: Characteristic (0x2803)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8295 2026-10-29 17:48:19.640187
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 0/6
+        #8294: len 11 (1 Kb/s)
+        Latency: 87 msec (5-132 msec ~88 msec)
+> HCI Event: LE Meta Event (0x3e) plen 6                                                                                                 #8296 2026-10-29 17:48:19.691229
+      LE PHY Update Complete (0x0c)
+        Status: Success (0x00)
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        TX PHY: LE 2M (0x02)
+        RX PHY: LE 2M (0x02)
+> HCI Event: LE Meta Event (0x3e) plen 31                                                                                                #8297 2026-10-29 17:48:19.715237
+      LE Enhanced Connection Complete (0x0a)
+        Status: Success (0x00)
+        Handle: 2050
+        Role: Central (0x00)
+        Peer address type: Public (0x00)
+        Peer address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Local resolvable private address: 00:00:00:00:00:00 (Non-Resolvable)
+        Peer resolvable private address: 00:00:00:00:00:00 (Non-Resolvable)
+        Connection interval: 45.00 msec (0x0024)
+        Connection latency: 0 (0x0000)
+        Supervision timeout: 420 msec (0x002a)
+        Central clock accuracy: 0x00
+@ MGMT Event: Device Connected (0x000b) plen 44                                                                                       {0x0001} 2026-10-29 17:48:19.715446
+        LE Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Flags: 0x00000008
+          Connection Locally Initiated
+        Data length: 31
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: not assigned (3846)
+          Data[24]: 00400a0080688742560284fd06da6a304b54f507de6f15a8
+> HCI Event: LE Meta Event (0x3e) plen 4                                                                                                 #8298 2026-10-29 17:48:19.716093
+      LE Channel Selection Algorithm (0x14)
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Algorithm: #2 (0x01)
+[672192]: < HCI Command: Read Remote Version Information (0x01|0x001d) plen 2                                                            #8299 2026-10-29 17:48:19.726683
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8300 2026-10-29 17:48:19.728144
+      Read Remote Version Information (0x01|0x001d) ncmd 1
+        Status: Success (0x00)
+< HCI Command: LE Add Device To Accept List (0x08|0x0011) plen 7                                                                         #8301 2026-10-29 17:48:19.728172
+        Address type: Public (0x00)
+        Address: 02:00:04:00:00:14 (OUI 02-00-04)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8302 2026-10-29 17:48:19.729141
+      LE Add Device To Accept List (0x08|0x0011) ncmd 1
+        Status: Success (0x00)
+< HCI Command: LE Set Address Resolution Enable (0x08|0x002d) plen 1                                                                     #8303 2026-10-29 17:48:19.729335
+        Address resolution: Enabled (0x01)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8304 2026-10-29 17:48:19.730040
+      LE Set Address Resolution Enable (0x08|0x002d) ncmd 1
+        Status: Success (0x00)
+< HCI Command: LE Set Extended Scan Parameters (0x08|0x0041) plen 13                                                                     #8305 2026-10-29 17:48:19.730219
+        Own address type: Public (0x00)
+        Filter policy: Ignore not in accept list (0x01)
+        PHYs: 0x05
+        Entry 0: LE 1M
+          Type: Passive (0x00)
+          Interval: 60.000 msec (0x0060)
+          Window: 30.000 msec (0x0030)
+        Entry 1: LE Coded
+          Type: Passive (0x00)
+          Interval: 180.000 msec (0x0120)
+          Window: 90.000 msec (0x0090)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8306 2026-10-29 17:48:19.731134
+      LE Set Extended Scan Parameters (0x08|0x0041) ncmd 1
+        Status: Success (0x00)
+< HCI Command: LE Set Extended Scan Enable (0x08|0x0042) plen 6                                                                          #8307 2026-10-29 17:48:19.731306
+        Extended scan: Enabled (0x01)
+        Filter duplicates: Enabled (0x01)
+        Duration: 0 msec (0x0000)
+        Period: 0.00 sec (0x0000)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8308 2026-10-29 17:48:19.734132
+      LE Set Extended Scan Enable (0x08|0x0042) ncmd 2
+        Status: Success (0x00)
+< HCI Command: LE Read Remote Used Features (0x08|0x0016) plen 2                                                                         #8309 2026-10-29 17:48:19.734300
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8310 2026-10-29 17:48:19.735128
+      LE Read Remote Used Features (0x08|0x0016) ncmd 1
+        Status: Success (0x00)
+> HCI Event: LE Meta Event (0x3e) plen 12                                                                                                #8311 2026-10-29 17:48:19.736141
+      LE Read Remote Used Features (0x04)
+        Status: Success (0x00)
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Features[0/0][8]: fdfd01f70f000000
+          LE Encryption
+          Extended Reject Indication
+          Peripheral-initiated Features Exchange
+          LE Ping
+          LE Data Packet Length Extension
+          LL Privacy
+          Extended Scanner Filter Policies
+          LE 2M PHY
+          Stable Modulation Index - Receiver
+          LE Coded PHY
+          LE Extended Advertising
+          LE Periodic Advertising
+          Channel Selection Algorithm #2
+          LE Power Class 1
+          Minimum Number of Used Channels Procedure
+          Periodic Advertising Sync Transfer - Sender
+          Periodic Advertising Sync Transfer - Recipient
+          Sleep Clock Accuracy Updates
+          Connected Isochronous Stream - Central
+          Connected Isochronous Stream - Peripheral
+          Isochronous Broadcaster
+          Synchronized Receiver
+          Connected Isochronous Stream (Host Support)
+          LE Power Control Request
+          LE Power Control Request
+          LE Path Loss Monitoring
+< HCI Command: LE Read Remote Used Features (0x08|0x0016) plen 2                                                                         #8312 2026-10-29 17:48:19.736331
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8313 2026-10-29 17:48:19.737043
+      LE Read Remote Used Features (0x08|0x0016) ncmd 1
+        Status: Success (0x00)
+> HCI Event: LE Meta Event (0x3e) plen 12                                                                                                #8314 2026-10-29 17:48:19.739123
+      LE Read Remote Used Features (0x04)
+        Status: Success (0x00)
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Features[0/0][8]: fff9010000000000
+          LE Encryption
+          Connection Parameter Request Procedure
+          Extended Reject Indication
+          Peripheral-initiated Features Exchange
+          LE Ping
+          LE Data Packet Length Extension
+          LL Privacy
+          Extended Scanner Filter Policies
+          LE 2M PHY
+          LE Coded PHY
+          LE Extended Advertising
+          LE Periodic Advertising
+          Channel Selection Algorithm #2
+          LE Power Class 1
+          Minimum Number of Used Channels Procedure
+> ACL Data RX: Handle 2050 flags 0x02 dlen 16                                                                                            #8315 2026-10-29 17:48:19.740517
+      LE L2CAP: Connection Parameter Update Request (0x12) ident 1 len 8
+        Min interval: 12
+        Max interval: 12
+        Peripheral latency: 0
+        Timeout multiplier: 400
+@ MGMT Event: New Connection Parameter (0x001c) plen 16                                                                               {0x0001} 2026-10-29 17:48:19.740674
+        Store hint: Reserved (0x11)
+        LE Address: 01:02:00:01:00:00 (OUI 01-02-00)
+        Min connection interval: 12
+        Max connection interval: 12
+        Connection latency: 0 (0x0000)
+        Supervision timeout: 400
+< ACL Data TX: Handle 2050 [1/6] flags 0x00 dlen 10                                                                                      #8316 2026-10-29 17:48:19.740678
+      LE L2CAP: Connection Parameter Update Response (0x13) ident 1 len 2
+        Result: Connection Parameters accepted (0x0000)
+< HCI Command: LE Connection Update (0x08|0x0013) plen 14                                                                                #8317 2026-10-29 17:48:19.740696
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Min connection interval: 15.00 msec (0x000c)
+        Max connection interval: 15.00 msec (0x000c)
+        Connection latency: 0 (0x0000)
+        Supervision timeout: 4000 msec (0x0190)
+        Min connection length: 0.000 msec (0x0000)
+        Max connection length: 0.000 msec (0x0000)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8318 2026-10-29 17:48:19.742052
+      LE Connection Update (0x08|0x0013) ncmd 1
+        Status: Success (0x00)
+[672192]: < ACL Data TX: Handle 2049 [2/6] flags 0x00 dlen 7                                                                             #8319 2026-10-29 17:48:19.761303
+      ATT: Exchange MTU Request (0x02) len 2
+        Client RX MTU: 517
+[672192]: < ACL Data TX: Handle 2049 [3/6] flags 0x00 dlen 9                                                                             #8320 2026-10-29 17:48:19.761791
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x0001
+        Error: Attribute Not Found (0x0a)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8321 2026-10-29 17:48:19.780183
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 2/6
+        #8319: len 7 (3 Kb/s)
+        Latency: 18 msec (18-18 msec ~18 msec)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8322 2026-10-29 17:48:19.781176
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 1/6
+        #8320: len 9 (3 Kb/s)
+        Latency: 19 msec (18-19 msec ~19 msec)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8323 2026-10-29 17:48:19.784186
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 0/6
+        #8316: len 10 (1 Kb/s)
+        Latency: 43 msec (43-43 msec ~43 msec)
+> HCI Event: LE Meta Event (0x3e) plen 53                                                                                                #8324 2026-10-29 17:48:19.816181
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x0013
+            Props: 0x0013
+              Connectable
+              Scannable
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: ADV_IND (0x0013)
+          Address type: Public (0x00)
+          Address: 02:00:04:00:00:14 (OUI 02-00-04)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -78 dBm (0xb2)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x1b
+        02 01 06 03 03 00 ff 08 1b 14 00 00 04 00 02 00  ................
+        0a ff 56 45 4e 44 4f 52 30 30 30                 ..VENDOR000     
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        16-bit Service UUIDs (complete): 1 entry
+          Unknown (0xff00)
+        Unknown EIR field 0x1b[7]: 14000004000200
+        Company: not assigned (17750)
+          Data[7]: 4e444f52303030
+< HCI Command: LE Set Extended Scan Enable (0x08|0x0042) plen 6                                                                          #8325 2026-10-29 17:48:19.816429
+        Extended scan: Disabled (0x00)
+        Filter duplicates: Disabled (0x00)
+        Duration: 0 msec (0x0000)
+        Period: 0.00 sec (0x0000)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8326 2026-10-29 17:48:19.819058
+      LE Set Extended Scan Enable (0x08|0x0042) ncmd 2
+        Status: Success (0x00)
+< HCI Command: LE Extended Create Connection (0x08|0x0043) plen 26                                                                       #8327 2026-10-29 17:48:19.819329
+        Filter policy: Accept list is not used (0x00)
+        Own address type: Public (0x00)
+        Peer address type: Public (0x00)
+        Peer address: 02:00:04:00:00:14 (OUI 02-00-04)
+        Initiating PHYs: 0x01
+        Entry 0: LE 1M
+          Scan interval: 60.000 msec (0x0060)
+          Scan window: 60.000 msec (0x0060)
+          Min connection interval: 30.00 msec (0x0018)
+          Max connection interval: 50.00 msec (0x0028)
+          Connection latency: 0 (0x0000)
+          Supervision timeout: 420 msec (0x002a)
+          Min connection length: 0.000 msec (0x0000)
+          Max connection length: 0.000 msec (0x0000)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8328 2026-10-29 17:48:19.824042
+      LE Extended Create Connection (0x08|0x0043) ncmd 2
+        Status: Success (0x00)
+> HCI Event: LE Meta Event (0x3e) plen 11                                                                                                #8329 2026-10-29 17:48:19.827040
+      LE Data Length Change (0x07)
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Max TX octets: 251
+        Max TX time: 965
+        Max RX octets: 251
+        Max RX time: 965
+> ACL Data RX: Handle 2049 flags 0x02 dlen 7                                                                                             #8330 2026-10-29 17:48:19.829418
+      ATT: Exchange MTU Response (0x03) len 2
+        Server RX MTU: 517
+[672192]: < ACL Data TX: Handle 2049 [1/6] flags 0x00 dlen 11                                                                            #8331 2026-10-29 17:48:19.830075
+      ATT: Read By Group Type Request (0x10) len 6
+        Handle range: 0x0001-0xffff
+        Attribute group type: Primary Service (0x2800)
+> ACL Data RX: Handle 2048 flags 0x02 dlen 9                                                                                             #8332 2026-10-29 17:48:19.866577
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x0005
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2048 [2/6] flags 0x00 dlen 11                                                                            #8333 2026-10-29 17:48:19.867348
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0006-0x000d
+        Attribute type: Include (0x2802)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8334 2026-10-29 17:48:19.871177
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 1/6
+        #8331: len 11 (2 Kb/s)
+        Latency: 41 msec (18-41 msec ~30 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 18                                                                                            #8335 2026-10-29 17:48:19.916597
+      ATT: Read By Group Type Response (0x11) len 13
+        Attribute data length: 6
+        Attribute group list: 2 entries
+        Handle range: 0x0001-0x0007
+        UUID: Generic Attribute Profile (0x1801)
+        Handle range: 0x0014-0x001a
+        UUID: Generic Access Profile (0x1800)
+[672192]: < ACL Data TX: Handle 2049 [2/6] flags 0x00 dlen 11                                                                            #8336 2026-10-29 17:48:19.917450
+      ATT: Read By Group Type Request (0x10) len 6
+        Handle range: 0x001b-0xffff
+        Attribute group type: Primary Service (0x2800)
+> HCI Event: LE Meta Event (0x3e) plen 31                                                                                                #8337 2026-10-29 17:48:19.945258
+      LE Enhanced Connection Complete (0x0a)
+        Status: Success (0x00)
+        Handle: 2051
+        Role: Central (0x00)
+        Peer address type: Public (0x00)
+        Peer address: 02:00:04:00:00:14 (OUI 02-00-04)
+        Local resolvable private address: 00:00:00:00:00:00 (Non-Resolvable)
+        Peer resolvable private address: 00:00:00:00:00:00 (Non-Resolvable)
+        Connection interval: 45.00 msec (0x0024)
+        Connection latency: 0 (0x0000)
+        Supervision timeout: 420 msec (0x002a)
+        Central clock accuracy: 0x00
+@ MGMT Event: Device Connected (0x000b) plen 40                                                                                       {0x0001} 2026-10-29 17:48:19.945493
+        LE Address: 02:00:04:00:00:14 (OUI 02-00-04)
+        Flags: 0x00000008
+          Connection Locally Initiated
+        Data length: 27
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        16-bit Service UUIDs (complete): 1 entry
+          Unknown (0xff00)
+        Unknown EIR field 0x1b[7]: 14000004000200
+        Company: not assigned (17750)
+          Data[7]: 4e444f52303030
+> HCI Event: LE Meta Event (0x3e) plen 4                                                                                                 #8338 2026-10-29 17:48:19.946087
+      LE Channel Selection Algorithm (0x14)
+        Handle: 2051 Address: 02:00:04:00:00:14 (OUI 02-00-04)
+        Algorithm: #2 (0x01)
+[672192]: < HCI Command: Read Remote Version Information (0x01|0x001d) plen 2                                                            #8339 2026-10-29 17:48:19.951549
+        Handle: 2051 Address: 02:00:04:00:00:14 (OUI 02-00-04)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8340 2026-10-29 17:48:19.952007
+      Read Remote Version Information (0x01|0x001d) ncmd 1
+        Status: Success (0x00)
+< HCI Command: LE Read Remote Used Features (0x08|0x0016) plen 2                                                                         #8341 2026-10-29 17:48:19.952063
+        Handle: 2051 Address: 02:00:04:00:00:14 (OUI 02-00-04)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8342 2026-10-29 17:48:19.953135
+      LE Read Remote Used Features (0x08|0x0016) ncmd 1
+        Status: Success (0x00)
+> HCI Event: LE Meta Event (0x3e) plen 12                                                                                                #8343 2026-10-29 17:48:19.966196
+      LE Read Remote Used Features (0x04)
+        Status: Success (0x00)
+        Handle: 2051 Address: 02:00:04:00:00:14 (OUI 02-00-04)
+        Features[0/0][8]: fff9010000000000
+          LE Encryption
+          Connection Parameter Request Procedure
+          Extended Reject Indication
+          Peripheral-initiated Features Exchange
+          LE Ping
+          LE Data Packet Length Extension
+          LL Privacy
+          Extended Scanner Filter Policies
+          LE 2M PHY
+          LE Coded PHY
+          LE Extended Advertising
+          LE Periodic Advertising
+          Channel Selection Algorithm #2
+          LE Power Class 1
+          Minimum Number of Used Channels Procedure
+> ACL Data RX: Handle 2051 flags 0x02 dlen 16                                                                                            #8344 2026-10-29 17:48:19.966461
+      LE L2CAP: Connection Parameter Update Request (0x12) ident 4 len 8
+        Min interval: 12
+        Max interval: 12
+        Peripheral latency: 0
+        Timeout multiplier: 400
+@ MGMT Event: New Connection Parameter (0x001c) plen 16                                                                               {0x0001} 2026-10-29 17:48:19.966565
+        Store hint: Reserved (0x14)
+        LE Address: 01:02:00:04:00:00 (OUI 01-02-00)
+        Min connection interval: 12
+        Max connection interval: 12
+        Connection latency: 0 (0x0000)
+        Supervision timeout: 400
+< ACL Data TX: Handle 2051 [3/6] flags 0x00 dlen 10                                                                                      #8345 2026-10-29 17:48:19.966586
+      LE L2CAP: Connection Parameter Update Response (0x13) ident 4 len 2
+        Result: Connection Parameters accepted (0x0000)
+< HCI Command: LE Connection Update (0x08|0x0013) plen 14                                                                                #8346 2026-10-29 17:48:19.966635
+        Handle: 2051 Address: 02:00:04:00:00:14 (OUI 02-00-04)
+        Min connection interval: 15.00 msec (0x000c)
+        Max connection interval: 15.00 msec (0x000c)
+        Connection latency: 0 (0x0000)
+        Supervision timeout: 4000 msec (0x0190)
+        Min connection length: 0.000 msec (0x0000)
+        Max connection length: 0.000 msec (0x0000)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8347 2026-10-29 17:48:19.968067
+      LE Connection Update (0x08|0x0013) ncmd 1
+        Status: Success (0x00)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8348 2026-10-29 17:48:20.005217
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 2/6
+        #8336: len 11 (1 Kb/s)
+        Latency: 87 msec (18-87 msec ~58 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 26                                                                                            #8349 2026-10-29 17:48:20.005311
+      ATT: Read By Group Type Response (0x11) len 21
+        Attribute data length: 20
+        Attribute group list: 1 entry
+        Handle range: 0x0028-0xffff
+        UUID: Vendor specific (76656e64-6f72-2e69-6e76-616c69640000)
+[672192]: < ACL Data TX: Handle 2049 [3/6] flags 0x00 dlen 11                                                                            #8350 2026-10-29 17:48:20.006017
+      ATT: Read By Group Type Request (0x10) len 6
+        Handle range: 0x0001-0xffff
+        Attribute group type: Secondary Service (0x2801)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8351 2026-10-29 17:48:20.011220
+        Num handles: 1
+        Handle: 2051 Address: 02:00:04:00:00:14 (OUI 02-00-04)
+        Count: 1
+        Buffers: 2/6
+        #8345: len 10 (1 Kb/s)
+        Latency: 44 msec (44-44 msec ~44 msec)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8352 2026-10-29 17:48:20.095112
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 1/6
+        #8350: len 11 (0 Kb/s)
+        Latency: 89 msec (18-89 msec ~74 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 9                                                                                             #8353 2026-10-29 17:48:20.095215
+      ATT: Error Response (0x01) len 4
+        Read By Group Type Request (0x10)
+        Handle: 0x0001
+        Error: Unsupported Group Type (0x10)
+[672192]: < ACL Data TX: Handle 2049 [2/6] flags 0x00 dlen 11                                                                            #8354 2026-10-29 17:48:20.096984
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0001-0x0007
+        Attribute type: Include (0x2802)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8355 2026-10-29 17:48:20.180196
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 1/6
+        #8333: len 11 (0 Kb/s)
+        Latency: 312 msec (5-312 msec ~200 msec)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8356 2026-10-29 17:48:20.186203
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 0/6
+        #8354: len 11 (0 Kb/s)
+        Latency: 89 msec (18-89 msec ~81 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 9                                                                                             #8357 2026-10-29 17:48:20.231615
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x0001
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2049 [1/6] flags 0x00 dlen 11                                                                            #8358 2026-10-29 17:48:20.232334
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0001-0x0007
+        Attribute type: Characteristic (0x2803)
+> HCI Event: LE Meta Event (0x3e) plen 10                                                                                                #8359 2026-10-29 17:48:20.233169
+      LE Connection Update Complete (0x03)
+        Status: Success (0x00)
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Connection interval: 15.00 msec (0x000c)
+        Connection latency: 0 (0x0000)
+        Supervision timeout: 4000 msec (0x0190)
+> HCI Event: LE Meta Event (0x3e) plen 11                                                                                                #8360 2026-10-29 17:48:20.263222
+      LE Data Length Change (0x07)
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Max TX octets: 251
+        Max TX time: 965
+        Max RX octets: 27
+        Max RX time: 328
+> HCI Event: Read Remote Version Complete (0x0c) plen 8                                                                                  #8361 2026-10-29 17:48:20.293234
+        Status: Success (0x00)
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        LMP version: Bluetooth 5.0 (0x09) - Subversion 22 (0x0016)
+        Manufacturer: Espressif Incorporated ( 乐鑫信息科技(上海)有限公司 ) (741)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8362 2026-10-29 17:48:20.321187
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 0/6
+        #8358: len 11 (1 Kb/s)
+        Latency: 88 msec (18-89 msec ~85 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 27                                                                                            #8363 2026-10-29 17:48:20.321441
+      ATT: Read By Type Response (0x09) len 22
+        Attribute data length: 7
+        Attribute data list: 3 entries
+        Handle: 0x0002
+        Value[5]: 200300052a
+            Properties: 0x20
+              Indicate (0x20)
+            Value Handle: 0x0003
+            Value UUID: Service Changed (0x2a05)
+        Handle: 0x0004
+        Value[5]: 0205003a2b
+            Properties: 0x02
+              Read (0x02)
+            Value Handle: 0x0005
+            Value UUID: Server Supported Features (0x2b3a)
+        Handle: 0x0006
+        Value[5]: 0a0700292b
+            Properties: 0x0a
+              Read (0x02)
+              Write (0x08)
+            Value Handle: 0x0007
+            Value UUID: Client Supported Features (0x2b29)
+[672192]: < ACL Data TX: Handle 2049 [1/6] flags 0x00 dlen 11                                                                            #8364 2026-10-29 17:48:20.322200
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0007-0x0007
+        Attribute type: Characteristic (0x2803)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8365 2026-10-29 17:48:20.410114
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 0/6
+        #8364: len 11 (1 Kb/s)
+        Latency: 87 msec (18-89 msec ~86 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 9                                                                                             #8366 2026-10-29 17:48:20.410216
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x0007
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2049 [1/6] flags 0x00 dlen 11                                                                            #8367 2026-10-29 17:48:20.411049
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0014-0x001a
+        Attribute type: Include (0x2802)
+[672192]: < ACL Data TX: Handle 2050 [2/6] flags 0x00 dlen 7                                                                             #8368 2026-10-29 17:48:20.421695
+      ATT: Exchange MTU Request (0x02) len 2
+        Client RX MTU: 517
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8369 2026-10-29 17:48:20.428235
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 1/6
+        #8368: len 7 (9 Kb/s)
+        Latency: 6 msec (6-43 msec ~25 msec)
+> HCI Event: LE Meta Event (0x3e) plen 6                                                                                                 #8370 2026-10-29 17:48:20.443203
+      LE PHY Update Complete (0x0c)
+        Status: Success (0x00)
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        TX PHY: LE 2M (0x02)
+        RX PHY: LE 2M (0x02)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 7                                                                                             #8371 2026-10-29 17:48:20.443467
+      ATT: Exchange MTU Response (0x03) len 2
+        Server RX MTU: 256
+[672192]: < ACL Data TX: Handle 2050 [2/6] flags 0x00 dlen 11                                                                            #8372 2026-10-29 17:48:20.444212
+      ATT: Read By Group Type Request (0x10) len 6
+        Handle range: 0x0001-0xffff
+        Attribute group type: Primary Service (0x2800)
+> ACL Data RX: Handle 2048 flags 0x02 dlen 9                                                                                             #8373 2026-10-29 17:48:20.451530
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x0006
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2048 [3/6] flags 0x00 dlen 11                                                                            #8374 2026-10-29 17:48:20.456510
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0006-0x000d
+        Attribute type: Characteristic (0x2803)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8375 2026-10-29 17:48:20.458142
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 2/6
+        #8372: len 11 (6 Kb/s)
+        Latency: 13 msec (6-43 msec ~19 msec)
+bundle[54160]: @ MGMT Command: Start Discovery (0x0023) plen 1                                                                        {0x0001} 2026-10-29 17:48:20.467759
+        Address type: 0x07
+          BR/EDR
+          LE Public
+          LE Random
+< HCI Command: LE Set Address Resolution Enable (0x08|0x002d) plen 1                                                                     #8376 2026-10-29 17:48:20.467968
+        Address resolution: Disabled (0x00)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8377 2026-10-29 17:48:20.469142
+      LE Set Address Resolution Enable (0x08|0x002d) ncmd 1
+        Status: Success (0x00)
+< HCI Command: LE Set Random Address (0x08|0x0005) plen 6                                                                                #8378 2026-10-29 17:48:20.469488
+        Address: 32:00:00:00:00:20 (Non-Resolvable)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8379 2026-10-29 17:48:20.470017
+      LE Set Random Address (0x08|0x0005) ncmd 1
+        Status: Success (0x00)
+< HCI Command: LE Set Extended Scan Parameters (0x08|0x0041) plen 13                                                                     #8380 2026-10-29 17:48:20.470363
+        Own address type: Random (0x01)
+        Filter policy: Accept all advertisement (0x00)
+        PHYs: 0x05
+        Entry 0: LE 1M
+          Type: Active (0x01)
+          Interval: 22.500 msec (0x0024)
+          Window: 11.250 msec (0x0012)
+        Entry 1: LE Coded
+          Type: Active (0x01)
+          Interval: 67.500 msec (0x006c)
+          Window: 33.750 msec (0x0036)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8381 2026-10-29 17:48:20.471061
+      LE Set Extended Scan Parameters (0x08|0x0041) ncmd 1
+        Status: Success (0x00)
+< HCI Command: LE Set Extended Scan Enable (0x08|0x0042) plen 6                                                                          #8382 2026-10-29 17:48:20.471310
+        Extended scan: Enabled (0x01)
+        Filter duplicates: Enabled (0x01)
+        Duration: 0 msec (0x0000)
+        Period: 0.00 sec (0x0000)
+> HCI Event: Command Complete (0x0e) plen 4                                                                                              #8383 2026-10-29 17:48:20.472039
+      LE Set Extended Scan Enable (0x08|0x0042) ncmd 2
+        Status: Success (0x00)
+@ MGMT Event: Discovering (0x0013) plen 2                                                                                             {0x0001} 2026-10-29 17:48:20.472162
+        Address type: 0x07
+          BR/EDR
+          LE Public
+          LE Random
+        Discovery: Enabled (0x01)
+@ MGMT Event: Command Complete (0x0001) plen 4                                                                                        {0x0001} 2026-10-29 17:48:20.472290
+      Start Discovery (0x0023) plen 1
+        Status: Success (0x00)
+        Address type: 0x07
+          BR/EDR
+          LE Public
+          LE Random
+> ACL Data RX: Handle 2050 flags 0x02 dlen 24                                                                                            #8384 2026-10-29 17:48:20.473422
+      ATT: Read By Group Type Response (0x11) len 19
+        Attribute data length: 6
+        Attribute group list: 3 entries
+        Handle range: 0x0001-0x0005
+        UUID: Generic Access Profile (0x1800)
+        Handle range: 0x0006-0x000d
+        UUID: Generic Attribute Profile (0x1801)
+        Handle range: 0x000e-0xffff
+        UUID: Unknown (0xff00)
+[672192]: < ACL Data TX: Handle 2050 [3/6] flags 0x00 dlen 11                                                                            #8385 2026-10-29 17:48:20.474067
+      ATT: Read By Group Type Request (0x10) len 6
+        Handle range: 0x0001-0xffff
+        Attribute group type: Secondary Service (0x2801)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8386 2026-10-29 17:48:20.488199
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 2/6
+        #8385: len 11 (6 Kb/s)
+        Latency: 14 msec (6-43 msec ~16 msec)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8387 2026-10-29 17:48:20.500116
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 1/6
+        #8367: len 11 (0 Kb/s)
+        Latency: 89 msec (18-89 msec ~87 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 9                                                                                             #8388 2026-10-29 17:48:20.500215
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x0014
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2049 [2/6] flags 0x00 dlen 11                                                                            #8389 2026-10-29 17:48:20.500931
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0014-0x001a
+        Attribute type: Characteristic (0x2803)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 9                                                                                             #8390 2026-10-29 17:48:20.503569
+      ATT: Error Response (0x01) len 4
+        Read By Group Type Request (0x10)
+        Handle: 0x0001
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2050 [3/6] flags 0x00 dlen 11                                                                            #8391 2026-10-29 17:48:20.504181
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0001-0x0005
+        Attribute type: Include (0x2802)
+> HCI Event: LE Meta Event (0x3e) plen 10                                                                                                #8392 2026-10-29 17:48:20.522210
+      LE Connection Update Complete (0x03)
+        Status: Success (0x00)
+        Handle: 2051 Address: 02:00:04:00:00:14 (OUI 02-00-04)
+        Connection interval: 15.00 msec (0x000c)
+        Connection latency: 0 (0x0000)
+        Supervision timeout: 4000 msec (0x0190)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8393 2026-10-29 17:48:20.533198
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 2/6
+        #8391: len 11 (3 Kb/s)
+        Latency: 29 msec (6-43 msec ~22 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 9                                                                                             #8394 2026-10-29 17:48:20.548595
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x0001
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2050 [3/6] flags 0x00 dlen 11                                                                            #8395 2026-10-29 17:48:20.549308
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0001-0x0005
+        Attribute type: Characteristic (0x2803)
+> HCI Event: LE Meta Event (0x3e) plen 11                                                                                                #8396 2026-10-29 17:48:20.551199
+      LE Data Length Change (0x07)
+        Handle: 2051 Address: 02:00:04:00:00:14 (OUI 02-00-04)
+        Max TX octets: 251
+        Max TX time: 2120
+        Max RX octets: 27
+        Max RX time: 328
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8397 2026-10-29 17:48:20.563214
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 2/6
+        #8395: len 11 (6 Kb/s)
+        Latency: 13 msec (6-43 msec ~18 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 20                                                                                            #8398 2026-10-29 17:48:20.578614
+      ATT: Read By Type Response (0x09) len 15
+        Attribute data length: 7
+        Attribute data list: 2 entries
+        Handle: 0x0002
+        Value[5]: 020300002a
+            Properties: 0x02
+              Read (0x02)
+            Value Handle: 0x0003
+            Value UUID: Device Name (0x2a00)
+        Handle: 0x0004
+        Value[5]: 020500012a
+            Properties: 0x02
+              Read (0x02)
+            Value Handle: 0x0005
+            Value UUID: Appearance (0x2a01)
+[672192]: < ACL Data TX: Handle 2050 [3/6] flags 0x00 dlen 11                                                                            #8399 2026-10-29 17:48:20.579452
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0005-0x0005
+        Attribute type: Characteristic (0x2803)
+> HCI Event: Read Remote Version Complete (0x0c) plen 8                                                                                  #8400 2026-10-29 17:48:20.581207
+        Status: Success (0x00)
+        Handle: 2051 Address: 02:00:04:00:00:14 (OUI 02-00-04)
+        LMP version: Bluetooth 5.0 (0x09) - Subversion 22 (0x0016)
+        Manufacturer: Espressif Incorporated ( 乐鑫信息科技(上海)有限公司 ) (741)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8401 2026-10-29 17:48:20.590220
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 2/6
+        #8389: len 11 (0 Kb/s)
+        Latency: 89 msec (18-89 msec ~88 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 27                                                                                            #8402 2026-10-29 17:48:20.590324
+      ATT: Read By Type Response (0x09) len 22
+        Attribute data length: 7
+        Attribute data list: 3 entries
+        Handle: 0x0015
+        Value[5]: 021600002a
+            Properties: 0x02
+              Read (0x02)
+            Value Handle: 0x0016
+            Value UUID: Device Name (0x2a00)
+        Handle: 0x0017
+        Value[5]: 021800012a
+            Properties: 0x02
+              Read (0x02)
+            Value Handle: 0x0018
+            Value UUID: Appearance (0x2a01)
+        Handle: 0x0019
+        Value[5]: 021a00a62a
+            Properties: 0x02
+              Read (0x02)
+            Value Handle: 0x001a
+            Value UUID: Central Address Resolution (0x2aa6)
+[672192]: < ACL Data TX: Handle 2049 [3/6] flags 0x00 dlen 11                                                                            #8403 2026-10-29 17:48:20.591264
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x001a-0x001a
+        Attribute type: Characteristic (0x2803)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8404 2026-10-29 17:48:20.593082
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 2/6
+        #8399: len 11 (6 Kb/s)
+        Latency: 13 msec (6-43 msec ~16 msec)
+> HCI Event: LE Meta Event (0x3e) plen 57                                                                                                #8405 2026-10-29 17:48:20.607252
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x0012
+            Props: 0x0012
+              Scannable
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: ADV_SCAN_IND (0x0012)
+          Address type: Public (0x00)
+          Address: 02:00:04:00:00:14 (OUI 02-00-04)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -75 dBm (0xb5)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x1f
+        02 01 06 1b ff 06 0f 00 c0 0a 00 81 2c 5e 42 41  ............,^BA
+        d6 94 1a 69 dd 25 8d c1 0d 7f da 62 64 d7 4c     ...i.%.....bd.L 
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: not assigned (3846)
+          Data[24]: 00c00a00812c5e4241d6941a69dd258dc10d7fda6264d74c
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8406 2026-10-29 17:48:20.630204
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 1/6
+        #8374: len 11 (0 Kb/s)
+        Latency: 173 msec (5-312 msec ~187 msec)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8407 2026-10-29 17:48:20.635208
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 0/6
+        #8403: len 11 (2 Kb/s)
+        Latency: 43 msec (18-89 msec ~66 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 9                                                                                             #8408 2026-10-29 17:48:20.638563
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x0005
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2050 [1/6] flags 0x00 dlen 11                                                                            #8409 2026-10-29 17:48:20.639149
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0006-0x000d
+        Attribute type: Include (0x2802)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8410 2026-10-29 17:48:20.653215
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 0/6
+        #8409: len 11 (6 Kb/s)
+        Latency: 14 msec (6-43 msec ~15 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 9                                                                                             #8411 2026-10-29 17:48:20.669227
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x0006
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2050 [1/6] flags 0x00 dlen 11                                                                            #8412 2026-10-29 17:48:20.673821
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0006-0x000d
+        Attribute type: Characteristic (0x2803)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 9                                                                                             #8413 2026-10-29 17:48:20.681417
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x001a
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2049 [2/6] flags 0x00 dlen 11                                                                            #8414 2026-10-29 17:48:20.682463
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0028-0xffff
+        Attribute type: Include (0x2802)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8415 2026-10-29 17:48:20.683102
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 1/6
+        #8412: len 11 (9 Kb/s)
+        Latency: 9 msec (6-43 msec ~12 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 27                                                                                            #8416 2026-10-29 17:48:20.699571
+      ATT: Read By Type Response (0x09) len 22
+        Attribute data length: 7
+        Attribute data list: 3 entries
+        Handle: 0x0007
+        Value[5]: 200800052a
+            Properties: 0x20
+              Indicate (0x20)
+            Value Handle: 0x0008
+            Value UUID: Service Changed (0x2a05)
+        Handle: 0x000a
+        Value[5]: 020b003a2b
+            Properties: 0x02
+              Read (0x02)
+            Value Handle: 0x000b
+            Value UUID: Server Supported Features (0x2b3a)
+        Handle: 0x000c
+        Value[5]: 0a0d00292b
+            Properties: 0x0a
+              Read (0x02)
+              Write (0x08)
+            Value Handle: 0x000d
+            Value UUID: Client Supported Features (0x2b29)
+[672192]: < ACL Data TX: Handle 2050 [2/6] flags 0x00 dlen 11                                                                            #8417 2026-10-29 17:48:20.700462
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x000d-0x000d
+        Attribute type: Characteristic (0x2803)
+> HCI Event: LE Meta Event (0x3e) plen 57                                                                                                #8418 2026-10-29 17:48:20.707226
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x0013
+            Props: 0x0013
+              Connectable
+              Scannable
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: ADV_IND (0x0013)
+          Address type: Public (0x00)
+          Address: 02:00:05:00:00:16 (OUI 02-00-05)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -66 dBm (0xbe)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x1f
+        02 01 06 1b ff 06 0f 00 40 0a 00 80 29 65 42 84  ........@...)eB.
+        88 1d 74 24 87 71 bd 4f 8f 63 97 f2 af 77 36     ..t$.q.O.c...w6 
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: not assigned (3846)
+          Data[24]: 00400a008029654284881d74248771bd4f8f6397f2af7736
+@ MGMT Event: Device Found (0x0012) plen 45                                                                                           {0x0001} 2026-10-29 17:48:20.707431
+        LE Address: 02:00:04:00:00:14 (OUI 02-00-04)
+        RSSI: -75 dBm (0xb5)
+        Flags: 0x00000004
+          Not Connectable
+        Data length: 31
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: not assigned (3846)
+          Data[24]: 00c00a00812c5e4241d6941a69dd258dc10d7fda6264d74c
+> HCI Event: LE Meta Event (0x3e) plen 43                                                                                                #8419 2026-10-29 17:48:20.708192
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x001b
+            Props: 0x001b
+              Connectable
+              Scannable
+              Scan response
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: SCAN_RSP to an ADV_SCAN_IND (0x001b)
+          Address type: Public (0x00)
+          Address: 02:00:05:00:00:16 (OUI 02-00-05)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -69 dBm (0xbb)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x11
+        10 09 44 45 56 49 43 45 2d 42 30 30 30 30 30 30  ..DEVICE-B000000
+        34                                               4               
+        Name (complete): DEVICE-B0000004
+@ MGMT Event: Device Found (0x0012) plen 62                                                                                           {0x0001} 2026-10-29 17:48:20.708385
+        LE Address: 02:00:05:00:00:16 (OUI 02-00-05)
+        RSSI: -69 dBm (0xbb)
+        Flags: 0x00000000
+        Data length: 48
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: not assigned (3846)
+          Data[24]: 00400a008029654284881d74248771bd4f8f6397f2af7736
+        Name (complete): DEVICE-B0000004
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8420 2026-10-29 17:48:20.728216
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 1/6
+        #8417: len 11 (3 Kb/s)
+        Latency: 27 msec (6-43 msec ~19 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 9                                                                                             #8421 2026-10-29 17:48:20.743596
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x000d
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2050 [2/6] flags 0x00 dlen 11                                                                            #8422 2026-10-29 17:48:20.744211
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x000e-0xffff
+        Attribute type: Include (0x2802)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8423 2026-10-29 17:48:20.758208
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 1/6
+        #8422: len 11 (6 Kb/s)
+        Latency: 13 msec (6-43 msec ~16 msec)
+> HCI Event: LE Meta Event (0x3e) plen 6                                                                                                 #8424 2026-10-29 17:48:20.760203
+      LE PHY Update Complete (0x0c)
+        Status: Success (0x00)
+        Handle: 2051 Address: 02:00:04:00:00:14 (OUI 02-00-04)
+        TX PHY: LE 2M (0x02)
+        RX PHY: LE 2M (0x02)
+> ACL Data RX: Handle 2048 flags 0x02 dlen 27                                                                                            #8425 2026-10-29 17:48:20.767403
+      ATT: Read By Type Response (0x09) len 22
+        Attribute data length: 7
+        Attribute data list: 3 entries
+        Handle: 0x0007
+        Value[5]: 200800052a
+            Properties: 0x20
+              Indicate (0x20)
+            Value Handle: 0x0008
+            Value UUID: Service Changed (0x2a05)
+        Handle: 0x000a
+        Value[5]: 020b003a2b
+            Properties: 0x02
+              Read (0x02)
+            Value Handle: 0x000b
+            Value UUID: Server Supported Features (0x2b3a)
+        Handle: 0x000c
+        Value[5]: 0a0d00292b
+            Properties: 0x0a
+              Read (0x02)
+              Write (0x08)
+            Value Handle: 0x000d
+            Value UUID: Client Supported Features (0x2b29)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8426 2026-10-29 17:48:20.770016
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 0/6
+        #8414: len 11 (1 Kb/s)
+        Latency: 87 msec (18-89 msec ~76 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 9                                                                                             #8427 2026-10-29 17:48:20.770065
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x0028
+        Error: Attribute Not Found (0x0a)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 9                                                                                             #8428 2026-10-29 17:48:20.773405
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x000e
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2048 [1/6] flags 0x00 dlen 11                                                                            #8429 2026-10-29 17:48:20.856860
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x000d-0x000d
+        Attribute type: Characteristic (0x2803)
+[672192]: < ACL Data TX: Handle 2049 [2/6] flags 0x00 dlen 11                                                                            #8430 2026-10-29 17:48:20.857078
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0028-0xffff
+        Attribute type: Characteristic (0x2803)
+[672192]: < ACL Data TX: Handle 2050 [3/6] flags 0x00 dlen 11                                                                            #8431 2026-10-29 17:48:20.857249
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x000e-0xffff
+        Attribute type: Characteristic (0x2803)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8432 2026-10-29 17:48:20.860186
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 2/6
+        #8430: len 11 (29 Kb/s)
+        Latency: 3 msec (3-89 msec ~40 msec)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8433 2026-10-29 17:48:20.863182
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 1/6
+        #8431: len 11 (17 Kb/s)
+        Latency: 5 msec (5-43 msec ~11 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 27                                                                                            #8434 2026-10-29 17:48:20.879575
+      ATT: Read By Type Response (0x09) len 22
+        Attribute data length: 7
+        Attribute data list: 3 entries
+        Handle: 0x000f
+        Value[5]: 12100001ff
+            Properties: 0x12
+              Read (0x02)
+              Notify (0x10)
+            Value Handle: 0x0010
+            Value UUID: Unknown (0xff01)
+        Handle: 0x0013
+        Value[5]: 0e140002ff
+            Properties: 0x0e
+              Read (0x02)
+              Write Without Response (0x04)
+              Write (0x08)
+            Value Handle: 0x0014
+            Value UUID: Unknown (0xff02)
+        Handle: 0x0016
+        Value[5]: 12170003ff
+            Properties: 0x12
+              Read (0x02)
+              Notify (0x10)
+            Value Handle: 0x0017
+            Value UUID: Unknown (0xff03)
+[672192]: < ACL Data TX: Handle 2050 [2/6] flags 0x00 dlen 11                                                                            #8435 2026-10-29 17:48:20.879973
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0017-0xffff
+        Attribute type: Characteristic (0x2803)
+> HCI Event: LE Meta Event (0x3e) plen 43                                                                                                #8436 2026-10-29 17:48:20.886151
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x0013
+            Props: 0x0013
+              Connectable
+              Scannable
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: ADV_IND (0x0013)
+          Address type: Public (0x00)
+          Address: 02:00:02:00:00:12 (OUI 02-00-02)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -72 dBm (0xb8)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x11
+        02 01 00 0d 09 44 45 56 49 43 45 2d 43 30 30 30  .....DEVICE-C000
+        31                                               1               
+        Flags: 0x00
+        Name (complete): DEVICE-C0001
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8437 2026-10-29 17:48:20.893042
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 1/6
+        #8435: len 11 (6 Kb/s)
+        Latency: 13 msec (5-43 msec ~12 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 69                                                                                            #8438 2026-10-29 17:48:20.906591
+      ATT: Read By Type Response (0x09) len 64
+        Attribute data length: 21
+        Attribute data list: 3 entries
+        Handle: 0x0029
+        Value[19]: 3a2a00020064696c61766e692e726f646e6576
+            Properties: 0x3a
+              Read (0x02)
+              Write (0x08)
+              Notify (0x10)
+              Indicate (0x20)
+            Value Handle: 0x002a
+            Value UUID: Vendor specific (76656e64-6f72-2e69-6e76-616c69640002)
+        Handle: 0x002b
+        Value[19]: 022c00010064696c61766e692e726f646e6576
+            Properties: 0x02
+              Read (0x02)
+            Value Handle: 0x002c
+            Value UUID: Vendor specific (76656e64-6f72-2e69-6e76-616c69640001)
+        Handle: 0x002d
+        Value[19]: 3a2e00030064696c61766e692e726f646e6576
+            Properties: 0x3a
+              Read (0x02)
+              Write (0x08)
+              Notify (0x10)
+              Indicate (0x20)
+            Value Handle: 0x002e
+            Value UUID: Vendor specific (76656e64-6f72-2e69-6e76-616c69640003)
+[672192]: < ACL Data TX: Handle 2049 [2/6] flags 0x00 dlen 11                                                                            #8439 2026-10-29 17:48:20.907427
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x002e-0xffff
+        Attribute type: Characteristic (0x2803)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 9                                                                                             #8440 2026-10-29 17:48:20.908587
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x0017
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2050 [3/6] flags 0x00 dlen 9                                                                             #8441 2026-10-29 17:48:20.909242
+      ATT: Find Information Request (0x04) len 4
+        Handle range: 0x0009-0x0009
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8442 2026-10-29 17:48:20.923200
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 2/6
+        #8441: len 9 (5 Kb/s)
+        Latency: 13 msec (5-43 msec ~13 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 10                                                                                            #8443 2026-10-29 17:48:20.938611
+      ATT: Find Information Response (0x05) len 5
+        Format: UUID-16 (0x01)
+        Handle: 0x0009
+        UUID: Client Characteristic Configuration (0x2902)
+[672192]: < ACL Data TX: Handle 2050 [3/6] flags 0x00 dlen 9                                                                             #8444 2026-10-29 17:48:20.939480
+      ATT: Find Information Request (0x04) len 4
+        Handle range: 0x0011-0x0012
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8445 2026-10-29 17:48:20.953209
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 2/6
+        #8444: len 9 (5 Kb/s)
+        Latency: 13 msec (5-43 msec ~13 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 14                                                                                            #8446 2026-10-29 17:48:20.968450
+      ATT: Find Information Response (0x05) len 9
+        Format: UUID-16 (0x01)
+        Handle: 0x0011
+        UUID: Client Characteristic Configuration (0x2902)
+        Handle: 0x0012
+        UUID: Characteristic User Description (0x2901)
+[672192]: < ACL Data TX: Handle 2050 [3/6] flags 0x00 dlen 9                                                                             #8447 2026-10-29 17:48:20.969139
+      ATT: Find Information Request (0x04) len 4
+        Handle range: 0x0015-0x0015
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8448 2026-10-29 17:48:20.983091
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 2/6
+        #8447: len 9 (5 Kb/s)
+        Latency: 13 msec (5-43 msec ~13 msec)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8449 2026-10-29 17:48:20.995089
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 1/6
+        #8439: len 11 (1 Kb/s)
+        Latency: 87 msec (3-89 msec ~63 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 9                                                                                             #8450 2026-10-29 17:48:20.995182
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x002e
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2049 [2/6] flags 0x00 dlen 9                                                                             #8451 2026-10-29 17:48:20.995915
+      ATT: Find Information Request (0x04) len 4
+        Handle range: 0x002f-0xffff
+> ACL Data RX: Handle 2050 flags 0x02 dlen 10                                                                                            #8452 2026-10-29 17:48:20.999567
+      ATT: Find Information Response (0x05) len 5
+        Format: UUID-16 (0x01)
+        Handle: 0x0015
+        UUID: Characteristic User Description (0x2901)
+[672192]: < ACL Data TX: Handle 2050 [3/6] flags 0x00 dlen 9                                                                             #8453 2026-10-29 17:48:21.000185
+      ATT: Find Information Request (0x04) len 4
+        Handle range: 0x0018-0xffff
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8454 2026-10-29 17:48:21.013202
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 2/6
+        #8453: len 9 (5 Kb/s)
+        Latency: 13 msec (5-43 msec ~13 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 14                                                                                            #8455 2026-10-29 17:48:21.028595
+      ATT: Find Information Response (0x05) len 9
+        Format: UUID-16 (0x01)
+        Handle: 0x0018
+        UUID: Client Characteristic Configuration (0x2902)
+        Handle: 0x0019
+        UUID: Characteristic User Description (0x2901)
+[672192]: < ACL Data TX: Handle 2050 [3/6] flags 0x00 dlen 9                                                                             #8456 2026-10-29 17:48:21.029461
+      ATT: Find Information Request (0x04) len 4
+        Handle range: 0x001a-0xffff
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8457 2026-10-29 17:48:21.036199
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 2/6
+        #8429: len 11 (0 Kb/s)
+        Latency: 179 msec (5-312 msec ~183 msec)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8458 2026-10-29 17:48:21.058200
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 1/6
+        #8456: len 9 (2 Kb/s)
+        Latency: 28 msec (5-43 msec ~21 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 9                                                                                             #8459 2026-10-29 17:48:21.073593
+      ATT: Error Response (0x01) len 4
+        Find Information Request (0x04)
+        Handle: 0x001a
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2050 [2/6] flags 0x00 dlen 7                                                                             #8460 2026-10-29 17:48:21.074505
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x0003 Type: Device Name (0x2a00)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8461 2026-10-29 17:48:21.085107
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 1/6
+        #8451: len 9 (0 Kb/s)
+        Latency: 89 msec (3-89 msec ~76 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 9                                                                                             #8462 2026-10-29 17:48:21.085209
+      ATT: Error Response (0x01) len 4
+        Find Information Request (0x04)
+        Handle: 0x002f
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2049 [2/6] flags 0x00 dlen 7                                                                             #8463 2026-10-29 17:48:21.086265
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x0016 Type: Device Name (0x2a00)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8464 2026-10-29 17:48:21.103082
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 1/6
+        #8460: len 7 (2 Kb/s)
+        Latency: 28 msec (5-43 msec ~24 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 20                                                                                            #8465 2026-10-29 17:48:21.105515
+      ATT: Read Response (0x0b) len 15
+        Value[15]: 4445564943452d4230303030303032
+        Handle: 0x0003 Type: Device Name (0x2a00)
+        Value[15]: 4445564943452d4230303030303032
+[672192]: < ACL Data TX: Handle 2050 [2/6] flags 0x00 dlen 7                                                                             #8466 2026-10-29 17:48:21.108410
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x0005 Type: Appearance (0x2a01)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8467 2026-10-29 17:48:21.118152
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 1/6
+        #8466: len 7 (6 Kb/s)
+        Latency: 9 msec (5-43 msec ~17 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 7                                                                                             #8468 2026-10-29 17:48:21.133587
+      ATT: Read Response (0x0b) len 2
+        Value[2]: 0000
+        Handle: 0x0005 Type: Appearance (0x2a01)
+        Value[2]: 0000
+[672192]: < ACL Data TX: Handle 2050 [2/6] flags 0x00 dlen 7                                                                             #8469 2026-10-29 17:48:21.134190
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x000b Type: Server Supported Features (0x2b3a)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8470 2026-10-29 17:48:21.148208
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 1/6
+        #8469: len 7 (4 Kb/s)
+        Latency: 14 msec (5-43 msec ~15 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 6                                                                                             #8471 2026-10-29 17:48:21.163593
+      ATT: Read Response (0x0b) len 1
+        Value[1]: 00
+        Handle: 0x000b Type: Server Supported Features (0x2b3a)
+        Value[1]: 00
+[672192]: < ACL Data TX: Handle 2050 [2/6] flags 0x00 dlen 7                                                                             #8472 2026-10-29 17:48:21.164230
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x000d Type: Client Supported Features (0x2b29)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8473 2026-10-29 17:48:21.175137
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 1/6
+        #8463: len 7 (0 Kb/s)
+        Latency: 88 msec (3-89 msec ~82 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 17                                                                                            #8474 2026-10-29 17:48:21.175222
+      ATT: Read Response (0x0b) len 12
+        Value[12]: 4445564943452d4330303031
+        Handle: 0x0016 Type: Device Name (0x2a00)
+        Value[12]: 4445564943452d4330303031
+[672192]: < ACL Data TX: Handle 2049 [2/6] flags 0x00 dlen 7                                                                             #8475 2026-10-29 17:48:21.175941
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x0018 Type: Appearance (0x2a01)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8476 2026-10-29 17:48:21.178193
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 1/6
+        #8472: len 7 (4 Kb/s)
+        Latency: 13 msec (5-43 msec ~14 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 6                                                                                             #8477 2026-10-29 17:48:21.193624
+      ATT: Read Response (0x0b) len 1
+        Value[1]: 00
+        Handle: 0x000d Type: Client Supported Features (0x2b29)
+        Value[1]: 00
+[672192]: < ACL Data TX: Handle 2050 [2/6] flags 0x00 dlen 7                                                                             #8478 2026-10-29 17:48:21.194297
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x0010 Type: Unknown (0xff01)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8479 2026-10-29 17:48:21.208211
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 1/6
+        #8478: len 7 (4 Kb/s)
+        Latency: 13 msec (5-43 msec ~14 msec)
+> ACL Data RX: Handle 2048 flags 0x02 dlen 9                                                                                             #8480 2026-10-29 17:48:21.216603
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x000d
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2048 [2/6] flags 0x00 dlen 11                                                                            #8481 2026-10-29 17:48:21.217353
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x000e-0xffff
+        Attribute type: Include (0x2802)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 6                                                                                             #8482 2026-10-29 17:48:21.238608
+      ATT: Read Response (0x0b) len 1
+        Value[1]: 00
+        Handle: 0x0010 Type: Unknown (0xff01)
+        Value[1]: 00
+[672192]: < ACL Data TX: Handle 2050 [3/6] flags 0x00 dlen 7                                                                             #8483 2026-10-29 17:48:21.239225
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x0014 Type: Unknown (0xff02)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8484 2026-10-29 17:48:21.253196
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 2/6
+        #8483: len 7 (4 Kb/s)
+        Latency: 13 msec (5-43 msec ~14 msec)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8485 2026-10-29 17:48:21.265067
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 1/6
+        #8475: len 7 (0 Kb/s)
+        Latency: 89 msec (3-89 msec ~85 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 7                                                                                             #8486 2026-10-29 17:48:21.265164
+      ATT: Read Response (0x0b) len 2
+        Value[2]: 0000
+        Handle: 0x0018 Type: Appearance (0x2a01)
+        Value[2]: 0000
+[672192]: < ACL Data TX: Handle 2049 [2/6] flags 0x00 dlen 7                                                                             #8487 2026-10-29 17:48:21.265912
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x0005 Type: Server Supported Features (0x2b3a)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 6                                                                                             #8488 2026-10-29 17:48:21.269414
+      ATT: Read Response (0x0b) len 1
+        Value[1]: 00
+        Handle: 0x0014 Type: Unknown (0xff02)
+        Value[1]: 00
+[672192]: < ACL Data TX: Handle 2050 [3/6] flags 0x00 dlen 7                                                                             #8489 2026-10-29 17:48:21.270021
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x0017 Type: Unknown (0xff03)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8490 2026-10-29 17:48:21.283218
+        Num handles: 1
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Count: 1
+        Buffers: 2/6
+        #8489: len 7 (4 Kb/s)
+        Latency: 13 msec (5-43 msec ~13 msec)
+> ACL Data RX: Handle 2050 flags 0x02 dlen 6                                                                                             #8491 2026-10-29 17:48:21.298611
+      ATT: Read Response (0x0b) len 1
+        Value[1]: 00
+        Handle: 0x0017 Type: Unknown (0xff03)
+        Value[1]: 00
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8492 2026-10-29 17:48:21.350217
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 1/6
+        #8481: len 11 (0 Kb/s)
+        Latency: 132 msec (5-312 msec ~158 msec)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8493 2026-10-29 17:48:21.355038
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 0/6
+        #8487: len 7 (0 Kb/s)
+        Latency: 89 msec (3-89 msec ~87 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 6                                                                                             #8494 2026-10-29 17:48:21.356523
+      ATT: Read Response (0x0b) len 1
+        Value[1]: 01
+        Handle: 0x0005 Type: Server Supported Features (0x2b3a)
+        Value[1]: 01
+[672192]: < ACL Data TX: Handle 2049 [1/6] flags 0x00 dlen 7                                                                             #8495 2026-10-29 17:48:21.357132
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x0007 Type: Client Supported Features (0x2b29)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8496 2026-10-29 17:48:21.400231
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 0/6
+        #8495: len 7 (1 Kb/s)
+        Latency: 43 msec (3-89 msec ~65 msec)
+bundle[54160]: @ MGMT Command: Add Device (0x0033) plen 8                                                                             {0x0001} 2026-10-29 17:48:21.421545
+        LE Address: 02:00:05:00:00:16 (OUI 02-00-05)
+        Action: Auto-connect remote device (0x02)
+@ MGMT Event: Device Flags Changed (0x002a) plen 15                                                                                   {0x0001} 2026-10-29 17:48:21.421730
+        LE Address: 02:00:05:00:00:16 (OUI 02-00-05)
+        Supported Flags: 0x00000007
+          Remote Wakeup
+          Device Privacy Mode
+          Address Resolution
+        Current Flags: 0x00000000
+@ MGMT Event: Command Complete (0x0001) plen 10                                                                                       {0x0001} 2026-10-29 17:48:21.421756
+      Add Device (0x0033) plen 7
+        Status: Success (0x00)
+        LE Address: 02:00:05:00:00:16 (OUI 02-00-05)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 6                                                                                             #8497 2026-10-29 17:48:21.446498
+      ATT: Read Response (0x0b) len 1
+        Value[1]: 00
+        Handle: 0x0007 Type: Client Supported Features (0x2b29)
+        Value[1]: 00
+[672192]: < ACL Data TX: Handle 2049 [1/6] flags 0x00 dlen 7                                                                             #8498 2026-10-29 17:48:21.447082
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x001a Type: Central Address Resolution (0x2aa6)
+> ACL Data RX: Handle 2048 flags 0x02 dlen 9                                                                                             #8499 2026-10-29 17:48:21.486629
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x000e
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2048 [2/6] flags 0x00 dlen 11                                                                            #8500 2026-10-29 17:48:21.487298
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x000e-0xffff
+        Attribute type: Characteristic (0x2803)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8501 2026-10-29 17:48:21.535049
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 1/6
+        #8498: len 7 (0 Kb/s)
+        Latency: 87 msec (3-89 msec ~76 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 6                                                                                             #8502 2026-10-29 17:48:21.537175
+      ATT: Read Response (0x0b) len 1
+        Value[1]: 01
+        Handle: 0x001a Type: Central Address Resolution (0x2aa6)
+        Value[1]: 01
+[672192]: < ACL Data TX: Handle 2049 [2/6] flags 0x00 dlen 7                                                                             #8503 2026-10-29 17:48:21.537579
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x002a Type: Vendor specific (76656e64-6f72-2e69-6e76-616c69640002)
+> HCI Event: LE Meta Event (0x3e) plen 43                                                                                                #8504 2026-10-29 17:48:21.573232
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x001a
+            Props: 0x001a
+              Scannable
+              Scan response
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: SCAN_RSP to an ADV_IND (0x001a)
+          Address type: Public (0x00)
+          Address: 02:00:04:00:00:14 (OUI 02-00-04)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -78 dBm (0xb2)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x11
+        10 09 44 45 56 49 43 45 2d 42 30 30 30 30 30 30  ..DEVICE-B000000
+        31                                               1               
+        Name (complete): DEVICE-B0000001
+@ MGMT Event: Device Found (0x0012) plen 31                                                                                           {0x0001} 2026-10-29 17:48:21.573390
+        LE Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        RSSI: -72 dBm (0xb8)
+        Flags: 0x00000000
+        Data length: 17
+        Flags: 0x00
+        Name (complete): DEVICE-C0001
+@ MGMT Event: Device Found (0x0012) plen 31                                                                                           {0x0001} 2026-10-29 17:48:21.573433
+        LE Address: 02:00:04:00:00:14 (OUI 02-00-04)
+        RSSI: -78 dBm (0xb2)
+        Flags: 0x00000020
+          Scan Response
+        Data length: 17
+        Name (complete): DEVICE-B0000001
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8505 2026-10-29 17:48:21.625117
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 1/6
+        #8503: len 7 (0 Kb/s)
+        Latency: 87 msec (3-89 msec ~82 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 5                                                                                             #8506 2026-10-29 17:48:21.625220
+      ATT: Read Response (0x0b) len 0
+        Value[0]: 
+        Handle: 0x002a Type: Vendor specific (76656e64-6f72-2e69-6e76-616c69640002)
+        Value[0]: 
+[672192]: < ACL Data TX: Handle 2049 [2/6] flags 0x00 dlen 7                                                                             #8507 2026-10-29 17:48:21.626130
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x002c Type: Vendor specific (76656e64-6f72-2e69-6e76-616c69640001)
+> HCI Event: LE Meta Event (0x3e) plen 49                                                                                                #8508 2026-10-29 17:48:21.649260
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x001b
+            Props: 0x001b
+              Connectable
+              Scannable
+              Scan response
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: SCAN_RSP to an ADV_SCAN_IND (0x001b)
+          Address type: Public (0x00)
+          Address: 02:00:02:00:00:12 (OUI 02-00-02)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -76 dBm (0xb4)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x17
+        16 16 fd df 01 df 20 01 ff ff 7c f0 21 75 59 01  ...... ...|.!uY.
+        03 00 00 10 00 ff ff                             .......         
+        Service Data: Unknown (0xdffd)
+          Data[19]: 01df2001ffff7cf0217559010300001000ffff
+@ MGMT Event: Device Found (0x0012) plen 37                                                                                           {0x0001} 2026-10-29 17:48:21.649488
+        LE Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        RSSI: -76 dBm (0xb4)
+        Flags: 0x00000020
+          Scan Response
+        Data length: 23
+        Service Data: Unknown (0xdffd)
+          Data[19]: 01df2001ffff7cf0217559010300001000ffff
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8509 2026-10-29 17:48:21.665221
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 1/6
+        #8500: len 11 (0 Kb/s)
+        Latency: 177 msec (5-312 msec ~167 msec)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8510 2026-10-29 17:48:21.715117
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 0/6
+        #8507: len 7 (0 Kb/s)
+        Latency: 88 msec (3-89 msec ~85 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 9                                                                                             #8511 2026-10-29 17:48:21.715221
+      ATT: Error Response (0x01) len 4
+        Read Request (0x0a)
+        Handle: 0x002c
+        Error: Insufficient Authentication (0x05)
+[672192]: < ACL Data TX: Handle 2049 [1/6] flags 0x00 dlen 7                                                                             #8512 2026-10-29 17:48:21.716848
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x002e Type: Vendor specific (76656e64-6f72-2e69-6e76-616c69640003)
+> ACL Data RX: Handle 2048 flags 0x02 dlen 13                                                                                            #8513 2026-10-29 17:48:21.801455
+      ATT: Read By Type Response (0x09) len 8
+        Attribute data length: 7
+        Attribute data list: 1 entry
+        Handle: 0x000f
+        Value[5]: 1a1000f1ab
+            Properties: 0x1a
+              Read (0x02)
+              Write (0x08)
+              Notify (0x10)
+            Value Handle: 0x0010
+            Value UUID: Unknown (0xabf1)
+[672192]: < ACL Data TX: Handle 2048 [2/6] flags 0x00 dlen 11                                                                            #8514 2026-10-29 17:48:21.802328
+      ATT: Read By Type Request (0x08) len 6
+        Handle range: 0x0010-0xffff
+        Attribute type: Characteristic (0x2803)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8515 2026-10-29 17:48:21.805105
+        Num handles: 1
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Count: 1
+        Buffers: 1/6
+        #8512: len 7 (0 Kb/s)
+        Latency: 88 msec (3-89 msec ~86 msec)
+> ACL Data RX: Handle 2049 flags 0x02 dlen 9                                                                                             #8516 2026-10-29 17:48:21.805191
+      ATT: Error Response (0x01) len 4
+        Read Request (0x0a)
+        Handle: 0x002e
+        Error: Insufficient Authentication (0x05)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8517 2026-10-29 17:48:21.890129
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 0/6
+        #8514: len 11 (1 Kb/s)
+        Latency: 87 msec (5-312 msec ~127 msec)
+< HCI Command: Disconnect (0x01|0x0006) plen 3                                                                                           #8518 2026-10-29 17:48:21.993797
+        Handle: 2051 Address: 02:00:04:00:00:14 (OUI 02-00-04)
+        Reason: Remote User Terminated Connection (0x13)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8519 2026-10-29 17:48:21.995205
+      Disconnect (0x01|0x0006) ncmd 1
+        Status: Success (0x00)
+> HCI Event: Inquiry Complete (0x01) plen 1                                                                                              #8520 2026-10-29 17:48:22.007205
+        Status: Success (0x00)
+> ACL Data RX: Handle 2048 flags 0x02 dlen 9                                                                                             #8521 2026-10-29 17:48:22.116610
+      ATT: Error Response (0x01) len 4
+        Read By Type Request (0x08)
+        Handle: 0x0010
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2048 [1/6] flags 0x00 dlen 9                                                                             #8522 2026-10-29 17:48:22.117374
+      ATT: Find Information Request (0x04) len 4
+        Handle range: 0x0009-0x0009
+> HCI Event: LE Meta Event (0x3e) plen 57                                                                                                #8523 2026-10-29 17:48:22.128244
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x0012
+            Props: 0x0012
+              Scannable
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: ADV_SCAN_IND (0x0012)
+          Address type: Public (0x00)
+          Address: 02:00:01:00:00:11 (OUI 02-00-01)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -69 dBm (0xbb)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x1f
+        02 01 06 1b ff 06 0f 00 c0 0a 00 81 25 f9 42 a9  ............%.B.
+        a2 27 a6 47 be 46 79 8d b0 e4 94 25 40 ad b7     .'.G.Fy....%@.. 
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: not assigned (3846)
+          Data[24]: 00c00a008125f942a9a227a647be46798db0e4942540adb7
+> HCI Event: LE Meta Event (0x3e) plen 43                                                                                                #8524 2026-10-29 17:48:22.129182
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x001a
+            Props: 0x001a
+              Scannable
+              Scan response
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: SCAN_RSP to an ADV_IND (0x001a)
+          Address type: Public (0x00)
+          Address: 02:00:01:00:00:11 (OUI 02-00-01)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -70 dBm (0xba)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x11
+        10 09 44 45 56 49 43 45 2d 42 30 30 30 30 30 30  ..DEVICE-B000000
+        32                                               2               
+        Name (complete): DEVICE-B0000002
+@ MGMT Event: Device Found (0x0012) plen 62                                                                                           {0x0001} 2026-10-29 17:48:22.129260
+        LE Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        RSSI: -70 dBm (0xba)
+        Flags: 0x00000004
+          Not Connectable
+        Data length: 48
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: not assigned (3846)
+          Data[24]: 00c00a008125f942a9a227a647be46798db0e4942540adb7
+        Name (complete): DEVICE-B0000002
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8525 2026-10-29 17:48:22.205195
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 0/6
+        #8522: len 9 (0 Kb/s)
+        Latency: 87 msec (5-312 msec ~107 msec)
+> ACL Data RX: Handle 2048 flags 0x02 dlen 10                                                                                            #8526 2026-10-29 17:48:22.296601
+      ATT: Find Information Response (0x05) len 5
+        Format: UUID-16 (0x01)
+        Handle: 0x0009
+        UUID: Client Characteristic Configuration (0x2902)
+[672192]: < ACL Data TX: Handle 2048 [1/6] flags 0x00 dlen 9                                                                             #8527 2026-10-29 17:48:22.297456
+      ATT: Find Information Request (0x04) len 4
+        Handle range: 0x0011-0xffff
+> HCI Event: LE Meta Event (0x3e) plen 55                                                                                                #8528 2026-10-29 17:48:22.461260
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x0013
+            Props: 0x0013
+              Connectable
+              Scannable
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: ADV_IND (0x0013)
+          Address type: Random (0x01)
+          Address: C2:00:00:00:00:18 (Static)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -81 dBm (0xaf)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x1d
+        02 01 06 19 ff 02 07 21 07 00 02 00 0c 0f 01 cb  .......!........
+        02 be 01 51 26 34 5e 01 2c 01 2a 00 9b           ...Q&4^.,.*..   
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: Akciju sabiedriba "SAF TEHNIKA" (1794)
+          Data[22]: 21070002000c0f01cb02be015126345e012c012a009b
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8529 2026-10-29 17:48:22.610154
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 0/6
+        #8527: len 9 (0 Kb/s)
+        Latency: 312 msec (5-312 msec ~210 msec)
+> ACL Data RX: Handle 2048 flags 0x02 dlen 10                                                                                            #8530 2026-10-29 17:48:22.701624
+      ATT: Find Information Response (0x05) len 5
+        Format: UUID-16 (0x01)
+        Handle: 0x0011
+        UUID: Client Characteristic Configuration (0x2902)
+[672192]: < ACL Data TX: Handle 2048 [1/6] flags 0x00 dlen 9                                                                             #8531 2026-10-29 17:48:22.702591
+      ATT: Find Information Request (0x04) len 4
+        Handle range: 0x0012-0xffff
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8532 2026-10-29 17:48:22.745221
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 0/6
+        #8531: len 9 (1 Kb/s)
+        Latency: 42 msec (5-312 msec ~126 msec)
+> HCI Event: LE Meta Event (0x3e) plen 57                                                                                                #8533 2026-10-29 17:48:23.002285
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x0013
+            Props: 0x0013
+              Connectable
+              Scannable
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: ADV_IND (0x0013)
+          Address type: Public (0x00)
+          Address: 02:00:04:00:00:15 (OUI 02-00-04)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -87 dBm (0xa9)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x1f
+        02 01 06 1b ff 06 0f 00 40 0a 00 80 a5 d5 42 43  ........@.....BC
+        20 4d 1b bc 53 66 25 f8 16 20 e7 d7 9f b0 c1      M..Sf%.. ..... 
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: not assigned (3846)
+          Data[24]: 00400a0080a5d54243204d1bbc536625f81620e7d79fb0c1
+@ MGMT Event: Device Found (0x0012) plen 43                                                                                           {0x0001} 2026-10-29 17:48:23.002513
+        LE Address: C2:00:00:00:00:18 (Static)
+        RSSI: -81 dBm (0xaf)
+        Flags: 0x00000000
+        Data length: 29
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: Akciju sabiedriba "SAF TEHNIKA" (1794)
+          Data[22]: 21070002000c0f01cb02be015126345e012c012a009b
+> ACL Data RX: Handle 2048 flags 0x02 dlen 9                                                                                             #8534 2026-10-29 17:48:23.106593
+      ATT: Error Response (0x01) len 4
+        Find Information Request (0x04)
+        Handle: 0x0012
+        Error: Attribute Not Found (0x0a)
+[672192]: < ACL Data TX: Handle 2048 [1/6] flags 0x00 dlen 7                                                                             #8535 2026-10-29 17:48:23.107637
+      ATT: Read Request (0x0a) len 2
+        Handle: 0x0003 Type: Device Name (0x2a00)
+> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                   #8536 2026-10-29 17:48:23.330214
+        Num handles: 1
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Count: 1
+        Buffers: 0/6
+        #8535: len 7 (0 Kb/s)
+        Latency: 222 msec (5-312 msec ~174 msec)
+> HCI Event: Disconnect Complete (0x05) plen 4                                                                                           #8537 2026-10-29 17:48:23.736217
+        Status: Success (0x00)
+        Handle: 2048 Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Reason: Connection Timeout (0x08)
+@ MGMT Event: Device Disconnected (0x000c) plen 8                                                                                     {0x0001} 2026-10-29 17:48:23.736386
+        LE Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        Reason: Connection timeout (0x01)
+< HCI Command: Disconnect (0x01|0x0006) plen 3                                                                                           #8538 2026-10-29 17:48:23.774023
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Reason: Remote User Terminated Connection (0x13)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8539 2026-10-29 17:48:23.775162
+      Disconnect (0x01|0x0006) ncmd 1
+        Status: Success (0x00)
+> HCI Event: Disconnect Complete (0x05) plen 4                                                                                           #8540 2026-10-29 17:48:23.788166
+        Status: Success (0x00)
+        Handle: 2050 Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Reason: Connection Terminated By Local Host (0x16)
+@ MGMT Event: Device Disconnected (0x000c) plen 8                                                                                     {0x0001} 2026-10-29 17:48:23.788314
+        LE Address: 02:00:01:00:00:11 (OUI 02-00-01)
+        Reason: Connection terminated by local host (0x02)
+< HCI Command: Disconnect (0x01|0x0006) plen 3                                                                                           #8541 2026-10-29 17:48:23.849729
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Reason: Remote User Terminated Connection (0x13)
+> HCI Event: Command Status (0x0f) plen 4                                                                                                #8542 2026-10-29 17:48:23.851207
+      Disconnect (0x01|0x0006) ncmd 1
+        Status: Success (0x00)
+> HCI Event: LE Meta Event (0x3e) plen 57                                                                                                #8543 2026-10-29 17:48:23.871236
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x0013
+            Props: 0x0013
+              Connectable
+              Scannable
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: ADV_IND (0x0013)
+          Address type: Public (0x00)
+          Address: 02:00:06:00:00:17 (OUI 02-00-06)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -87 dBm (0xa9)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x1f
+        02 01 06 1b ff 4c 00 03 16 00 00 00 02 77 00 00  .....L.......w..
+        00 00 00 00 00 00 00 00 00 00 00 00 00 00 cf     ............... 
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: Apple, Inc. (76)
+          Type: Unknown (3)
+          Data[22]: 000000027700000000000000000000000000000000cf
+@ MGMT Event: Device Found (0x0012) plen 45                                                                                           {0x0001} 2026-10-29 17:48:23.871376
+        LE Address: 02:00:04:00:00:15 (OUI 02-00-04)
+        RSSI: -87 dBm (0xa9)
+        Flags: 0x00000000
+        Data length: 31
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: not assigned (3846)
+          Data[24]: 00400a0080a5d54243204d1bbc536625f81620e7d79fb0c1
+> HCI Event: Disconnect Complete (0x05) plen 4                                                                                           #8544 2026-10-29 17:48:23.875186
+        Status: Success (0x00)
+        Handle: 2049 Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Reason: Connection Terminated By Local Host (0x16)
+@ MGMT Event: Device Disconnected (0x000c) plen 8                                                                                     {0x0001} 2026-10-29 17:48:23.875311
+        LE Address: 02:00:02:00:00:12 (OUI 02-00-02)
+        Reason: Connection terminated by local host (0x02)
+> HCI Event: LE Meta Event (0x3e) plen 43                                                                                                #8545 2026-10-29 17:48:23.966155
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x001b
+            Props: 0x001b
+              Connectable
+              Scannable
+              Scan response
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: SCAN_RSP to an ADV_SCAN_IND (0x001b)
+          Address type: Public (0x00)
+          Address: 02:00:04:00:00:15 (OUI 02-00-04)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -78 dBm (0xb2)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x11
+        10 09 44 45 56 49 43 45 2d 42 30 30 30 30 30 30  ..DEVICE-B000000
+        33                                               3               
+        Name (complete): DEVICE-B0000003
+@ MGMT Event: Device Found (0x0012) plen 45                                                                                           {0x0001} 2026-10-29 17:48:23.966176
+        LE Address: 02:00:06:00:00:17 (OUI 02-00-06)
+        RSSI: -87 dBm (0xa9)
+        Flags: 0x00000000
+        Data length: 31
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        Company: Apple, Inc. (76)
+          Type: Unknown (3)
+          Data[22]: 000000027700000000000000000000000000000000cf
+@ MGMT Event: Device Found (0x0012) plen 31                                                                                           {0x0001} 2026-10-29 17:48:23.966180
+        LE Address: 02:00:04:00:00:15 (OUI 02-00-04)
+        RSSI: -78 dBm (0xb2)
+        Flags: 0x00000020
+          Scan Response
+        Data length: 17
+        Name (complete): DEVICE-B0000003
+bundle[54160]: @ MGMT Command: Add Device (0x0033) plen 8                                                                             {0x0001} 2026-10-29 17:48:24.424173
+        LE Address: 02:00:04:00:00:15 (OUI 02-00-04)
+        Action: Auto-connect remote device (0x02)
+@ MGMT Event: Device Flags Changed (0x002a) plen 15                                                                                   {0x0001} 2026-10-29 17:48:24.424339
+        LE Address: 02:00:04:00:00:15 (OUI 02-00-04)
+        Supported Flags: 0x00000007
+          Remote Wakeup
+          Device Privacy Mode
+          Address Resolution
+        Current Flags: 0x00000000
+@ MGMT Event: Command Complete (0x0001) plen 10                                                                                       {0x0001} 2026-10-29 17:48:24.424369
+      Add Device (0x0033) plen 7
+        Status: Success (0x00)
+        LE Address: 02:00:04:00:00:15 (OUI 02-00-04)
+bundle[54160]: @ MGMT Command: Remove Device (0x0034) plen 7                                                                          {0x0001} 2026-10-29 17:48:24.424911
+        LE Address: 02:00:03:00:00:13 (OUI 02-00-03)
+@ MGMT Event: Command Complete (0x0001) plen 10                                                                                       {0x0001} 2026-10-29 17:48:24.429808
+      Remove Device (0x0034) plen 7
+        Status: Success (0x00)
+        LE Address: 02:00:03:00:00:13 (OUI 02-00-03)
+bundle[54160]: @ MGMT Command: Remove Device (0x0034) plen 7                                                                          {0x0001} 2026-10-29 17:48:24.430142
+        LE Address: 02:00:01:00:00:11 (OUI 02-00-01)
+@ MGMT Event: Command Complete (0x0001) plen 10                                                                                       {0x0001} 2026-10-29 17:48:24.437822
+      Remove Device (0x0034) plen 7
+        Status: Success (0x00)
+        LE Address: 02:00:01:00:00:11 (OUI 02-00-01)
+bundle[54160]: @ MGMT Command: Remove Device (0x0034) plen 7                                                                          {0x0001} 2026-10-29 17:48:24.438359
+        LE Address: 02:00:02:00:00:12 (OUI 02-00-02)
+@ MGMT Event: Command Complete (0x0001) plen 10                                                                                       {0x0001} 2026-10-29 17:48:24.445828
+      Remove Device (0x0034) plen 7
+        Status: Success (0x00)
+        LE Address: 02:00:02:00:00:12 (OUI 02-00-02)
+> HCI Event: LE Meta Event (0x3e) plen 54                                                                                                #8546 2026-10-29 17:48:24.566272
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x0013
+            Props: 0x0013
+              Connectable
+              Scannable
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: ADV_IND (0x0013)
+          Address type: Public (0x00)
+          Address: 02:00:03:00:00:13 (OUI 02-00-03)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -81 dBm (0xaf)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x1c
+        02 01 06 03 02 f0 ab 11 09 44 45 56 49 43 45 2d  .........DEVICE-
+        41 30 30 30 30 30 30 30 31 02 0a 03              A00000001...    
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        16-bit Service UUIDs (partial): 1 entry
+          Unknown (0xabf0)
+        Name (complete): DEVICE-A00000001
+        TX power: 3 dBm
+> HCI Event: LE Meta Event (0x3e) plen 26                                                                                                #8547 2026-10-29 17:48:25.810236
+      LE Extended Advertising Report (0x0d)
+        Num reports: 1
+        Entry 0
+          Event type: 0x001b
+            Props: 0x001b
+              Connectable
+              Scannable
+              Scan response
+              Use legacy advertising PDUs
+            Data status: [0;32mComplete[0m
+          Legacy PDU Type: SCAN_RSP to an ADV_SCAN_IND (0x001b)
+          Address type: Public (0x00)
+          Address: 02:00:03:00:00:13 (OUI 02-00-03)
+          Primary PHY: LE 1M
+          Secondary PHY: No packets
+          SID: no ADI field (0xff)
+          TX power: 127 dBm
+          RSSI: -84 dBm (0xac)
+          Periodic advertising interval: 0.00 msec (0x0000)
+          Direct address type: Public (0x00)
+          Direct address: 00:00:00:00:00:00 (OUI 00-00-00)
+          Data length: 0x00
+@ MGMT Event: Device Found (0x0012) plen 42                                                                                           {0x0001} 2026-10-29 17:48:25.810398
+        LE Address: 02:00:03:00:00:13 (OUI 02-00-03)
+        RSSI: -84 dBm (0xac)
+        Flags: 0x00000000
+        Data length: 28
+        Flags: 0x06
+          LE General Discoverable Mode
+          BR/EDR Not Supported
+        16-bit Service UUIDs (partial): 1 entry
+          Unknown (0xabf0)
+        Name (complete): DEVICE-A00000001
+        TX power: 3 dBm
+> HCI Event: Disconnect Complete (0x05) plen 4                                                                                           #8548 2026-10-29 17:48:25.977217
+        Status: Success (0x00)
+        Handle: 2051 Address: 02:00:04:00:00:14 (OUI 02-00-04)
+        Reason: Connection Terminated By Local Host (0x16)

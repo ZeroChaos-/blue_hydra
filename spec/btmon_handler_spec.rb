@@ -11,7 +11,7 @@ describe BlueHydra::BtmonHandler do
     queue = Queue.new
 
     begin
-      handler = BlueHydra::BtmonHandler.new(command, queue)
+      _handler = BlueHydra::BtmonHandler.new(command, queue)
     rescue BtmonExitedError
       # will be raised in file mode
     end
@@ -119,6 +119,199 @@ describe BlueHydra::BtmonHandler do
 
       # ...which is why the handler never lets one through
       expect(enqueued?(["> BR-ACL: Handle 256 [AA:BB:CC:DD:EE:FF] dlen 16\r\n"] + chunk[0..-2])).to eq(false)
+    end
+
+    # A GATT Walk's ATT traffic rides the Att_Bearer's LE link as ACL data, so
+    # every request we send and every response the peer returns appears in
+    # btmon decoded (L2CAP / ATT), and the decoded field names ("UUID:",
+    # "Handle range:") are exactly what parser branches key on. None of it may
+    # reach raw_queue - the queue injected by enqueued? is what Runner hands the
+    # handler as raw_queue - whichever way bluez spells the header, whichever
+    # direction the data flowed, and with or without the "toolname[pid]: "
+    # prefix. Requirements 15.1 and 15.4 of the gatt-service-scanning spec.
+    describe "ATT traffic from a GATT Walk" do
+      # decoded ATT bodies as btmon prints them, quoted from
+      # spec/fixtures/btmon.stdout (BlueZ 5.3x) and btmon_raw_1789672574.log
+      # (BlueZ 5.8x, a bluetoothd-driven walk): the MTU exchange, primary
+      # service discovery, a Device Name read and an Error Response, both ends
+      let(:att_bodies) do
+        [
+          ["      ATT: Exchange MTU Request (0x02) len 2\r\n",
+           "        Client RX MTU: 517\r\n"],
+          ["      ATT: Exchange MTU Response (0x03) len 2\r\n",
+           "        Server RX MTU: 23\r\n"],
+          ["      ATT: Read By Group Type Request (0x10) len 6\r\n",
+           "        Handle range: 0x0001-0xffff\r\n",
+           "        Attribute group type: Primary Service (0x2800)\r\n"],
+          ["      ATT: Read By Group Type Response (0x11) len 19\r\n",
+           "        Attribute data length: 6\r\n",
+           "        Attribute group list: 3 entries\r\n",
+           "        Handle range: 0x0001-0x0009\r\n",
+           "        UUID: Generic Access Profile (0x1800)\r\n",
+           "        Handle range: 0x000a-0x000f\r\n",
+           "        UUID: Generic Attribute Profile (0x1801)\r\n",
+           "        Handle range: 0x0010-0x001c\r\n",
+           "        UUID: Device Information (0x180a)\r\n"],
+          ["      ATT: Read By Group Type Response (0x11) len 21\r\n",
+           "        Attribute data length: 20\r\n",
+           "        Attribute group list: 1 entry\r\n",
+           "        Handle range: 0x0006-0x0010\r\n",
+           "        UUID: Vendor specific (00000211-b2d1-43f0-9b88-960cebf8b91e)\r\n"],
+          ["      ATT: Read By Type Request (0x08) len 6\r\n",
+           "        Handle range: 0x0001-0xffff\r\n",
+           "        Attribute type: Device Name (0x2a00)\r\n"],
+          ["      ATT: Read Request (0x0a) len 2\r\n",
+           "        Handle: 0x0005 Type: Appearance (0x2a01)\r\n"],
+          ["      ATT: Read Response (0x0b) len 15\r\n",
+           "        Handle: 0x0003 Type: Device Name (0x2a00)\r\n",
+           "        Value[15]:\r\n",
+           "        44 45 56 49 43 45 2d 42 30 30 30 30 30 30 31     DEVICE-B0000001 \r\n"],
+          ["      ATT: Error Response (0x01) len 4\r\n",
+           "        Read By Type Request (0x08)\r\n",
+           "        Handle: 0x0001\r\n",
+           "        Error: Attribute Not Found (0x0a)\r\n"]
+        ]
+      end
+
+      # decoded L2CAP bodies on the same links: LE signalling (CID 5) quoted
+      # from btmon_raw_1790024381.log, the classic Information Response whose
+      # "Features:" motivated ACL_DATA_RE, and the undecoded channel line btmon
+      # falls back to when it has no decoder for a CID
+      let(:l2cap_bodies) do
+        [
+          ["      LE L2CAP: Connection Parameter Update Request (0x12) ident 69 len 8\r\n",
+           "        Min interval: 12\r\n",
+           "        Max interval: 12\r\n",
+           "        Peripheral latency: 0\r\n",
+           "        Timeout multiplier: 400\r\n"],
+          ["      L2CAP: Information Response (0x0b) ident 1 len 8\r\n",
+           "        Features: 0x000000b8\r\n",
+           "          Enhanced Retransmission Mode\r\n",
+           "          Streaming Mode\r\n"],
+          ["      Channel: 4 len 7 [PSM 0 mode Basic (0x00)] {chan 0}\r\n",
+           "        02 17 00                                         ...\r\n"]
+        ]
+      end
+
+      # the header after the spelling: the link-type forms bracket the peer
+      # address, the older directional forms carry only the handle
+      let(:header_tails) do
+        {
+          "LE-ACL"      => "Handle 2048 [C2:00:00:00:00:18 (Static)] flags 0x02 dlen 7",
+          "BR-ACL"      => "Handle 256 [02:00:13:00:00:39 (OUI 02-00-13)] flags 0x02 dlen 16",
+          "ACL Data RX" => "Handle 3585 flags 0x02 dlen 7",
+          "ACL Data TX" => "Handle 3585 flags 0x00 dlen 7"
+        }
+      end
+
+      # every spelling x direction x prefix form, so a header that should have
+      # matched ACL_DATA_RE but did not shows up by name
+      def each_acl_header
+        header_tails.each do |spelling, tail|
+          [">", "<"].each do |direction|
+            ["", "ruby[2062621]: ", "bluetoothd[1210]: "].each do |prefix|
+              yield "#{prefix}#{direction} #{spelling}: #{tail}\r\n"
+            end
+          end
+        end
+      end
+
+      it "every spelling, direction and prefix form is one ACL_DATA_RE claims" do
+        each_acl_header do |first|
+          stripped = first.sub(BlueHydra::BtmonHandler::TOOL_PREFIX_RE, "")
+          expect(stripped).to match(BlueHydra::BtmonHandler::ACL_DATA_RE),
+            "ACL_DATA_RE does not match #{first.inspect}"
+        end
+      end
+
+      it "pushes nothing onto raw_queue for ACL data carrying decoded ATT lines" do
+        each_acl_header do |first|
+          att_bodies.each do |body|
+            expect(enqueued?([first] + body)).to eq(false),
+              "expected nothing on raw_queue for #{first.inspect} + #{body.first.strip.inspect}"
+          end
+        end
+      end
+
+      it "pushes nothing onto raw_queue for ACL data carrying decoded L2CAP lines" do
+        each_acl_header do |first|
+          l2cap_bodies.each do |body|
+            expect(enqueued?([first] + body)).to eq(false),
+              "expected nothing on raw_queue for #{first.inspect} + #{body.first.strip.inspect}"
+          end
+        end
+      end
+
+      # the exact text two btmon generations print for a Walk's opening
+      # exchange, trailing frame/timestamp columns included
+      it "drops a Walk's MTU exchange and service discovery as btmon prints them" do
+        # BlueZ 5.3x directional spelling, spec/fixtures/btmon.stdout
+        expect(enqueued?([
+          "< ACL Data TX: Handle 3585 flags 0x00 dlen 7         2015-12-10 11:30:58.881165\r\n",
+          "      ATT: Exchange MTU Request (0x02) len 2\r\n",
+          "        Client RX MTU: 517\r\n"])).to eq(false)
+        expect(enqueued?([
+          "> ACL Data RX: Handle 3585 flags 0x02 dlen 7         2015-12-10 11:30:58.913518\r\n",
+          "      ATT: Exchange MTU Response (0x03) len 2\r\n",
+          "        Server RX MTU: 23\r\n"])).to eq(false)
+        expect(enqueued?([
+          "> ACL Data RX: Handle 3585 flags 0x02 dlen 24        2015-12-10 11:30:58.951169\r\n",
+          "      ATT: Read By Group Type Response (0x11) len 19\r\n",
+          "        Attribute data length: 6\r\n",
+          "        Attribute group list: 3 entries\r\n",
+          "        Handle range: 0x0001-0x0009\r\n",
+          "        UUID: Generic Access Profile (0x1800)\r\n",
+          "        Handle range: 0x000a-0x000f\r\n",
+          "        UUID: Generic Attribute Profile (0x1801)\r\n",
+          "        Handle range: 0x0010-0x001c\r\n",
+          "        UUID: Device Information (0x180a)\r\n"])).to eq(false)
+
+        # BlueZ 5.8x link-type spelling, with the tool prefix bluez adds on
+        # the sending side, spec/fixtures/btmon_raw_1789672574.log
+        expect(enqueued?([
+          "bluetoothd[5287]: < LE-ACL: Handle 2048 [1/6] [02:00:14:00:00:40 (OUI 02-00-14)    ] flags 0x00 dlen 11                                   #305 2026-09-17 15:16:36.985921\r\n",
+          "      ATT: Read By Group Type Request (0x10) len 6\r\n",
+          "        Handle range: 0x0001-0xffff\r\n",
+          "        Attribute group type: Primary Service (0x2800)\r\n"])).to eq(false)
+        expect(enqueued?([
+          "> LE-ACL: Handle 2050 [02:00:04:00:00:14 (OUI 02-00-04)  ] flags 0x02 dlen 20                                                             #424 2026-09-17 15:16:38.148555\r\n",
+          "      ATT: Read Response (0x0b) len 15\r\n",
+          "        Handle: 0x0003 Type: Device Name (0x2a00)\r\n",
+          "        Value[15]:\r\n",
+          "        44 45 56 49 43 45 2d 42 30 30 30 30 30 30 31     DEVICE-B0000001 \r\n"])).to eq(false)
+      end
+
+      # Every ATT PDU the controller sends is acknowledged with a Number of
+      # Completed Packets event, and bluez monitor resolves the handle to the
+      # peer's address on the handle line. It is not a chunk start, so one that
+      # reached raw_queue would merge the walked device's address into whichever
+      # chunk is open. HCI_DROP_CODES already carries 0x13; this pins it for the
+      # address-bearing form a Walk produces (Requirement 15.4).
+      it "pushes nothing for Number of Completed Packets whose handle line carries the walked device's address" do
+        # the acknowledgement of a Read By Type Request, as printed in
+        # spec/fixtures/btmon_raw_1789672574.log, frame/timestamp columns included
+        expect(enqueued?([
+          "> HCI Event: Number of Completed Packets (0x13) plen 5                                                                                    #303 2026-09-17 15:16:36.895169\r\n",
+          "        Num handles: 1\r\n",
+          "        Handle: 2048 (LE-ACL) Address: 02:00:14:00:00:40 (OUI 02-00-14)\r\n",
+          "        Count: 1\r\n"])).to eq(false)
+
+        # a walked private-address device, tool-prefixed header
+        expect(enqueued?([
+          "ruby[2062621]: > HCI Event: Number of Completed Packets (0x13) plen 5\r\n",
+          "        Num handles: 1\r\n",
+          "        Handle: 3584 (LE-ACL) Address: 7A:BB:CC:DD:EE:FF (Resolvable)\r\n",
+          "        Count: 1\r\n"])).to eq(false)
+
+        # two Walks in flight: one event acknowledging packets on both links
+        expect(enqueued?([
+          "> HCI Event: Number of Completed Packets (0x13) plen 9\r\n",
+          "        Num handles: 2\r\n",
+          "        Handle: 2048 (LE-ACL) Address: C2:00:00:00:00:18 (Static)\r\n",
+          "        Count: 1\r\n",
+          "        Handle: 2049 (LE-ACL) Address: 7A:BB:CC:DD:EE:FF (Resolvable)\r\n",
+          "        Count: 2\r\n"])).to eq(false)
+      end
     end
   end
 
