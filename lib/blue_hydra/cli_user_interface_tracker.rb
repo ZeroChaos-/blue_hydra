@@ -173,16 +173,18 @@ module BlueHydra
     # written on this path (Requirement 12.9).
     #
     # Threads. cui_status is written by the parser thread alone: rows through
-    # update_cui_status, once per chunk, and names through this method, which
-    # Runner#drain_cui_names calls on that same thread after every chunk and
-    # every 0.5 s pop timeout, with the pairs the GATT scanner's Walk threads
-    # put on cui_name_queue. The result thread never writes cui_status: it
-    # sits behind database writes that would delay a table the operator
-    # watches live. The CUI thread reads the rows and prunes expired ones in
-    # CliUserInterface#cui_status with no mutex, the GVL-only posture that
-    # exists today; Hash#values takes its snapshot atomically in MRI, and a
-    # write that lands on a row the CUI thread has just pruned is harmless
-    # because nothing reads that row again.
+    # update_cui_status, once per chunk; names through this method, which
+    # Runner#drain_cui_names calls on that same thread after every chunk with
+    # the pairs the GATT scanner's Walk threads put on cui_name_queue; and
+    # deletions of expired rows through Runner#prune_cui_status, on that same
+    # thread after the drain, at most once per 60 s (Requirement 13.15). The
+    # result thread never writes cui_status: it sits behind database writes
+    # that would delay a table the operator watches live. The CUI thread and
+    # the file-API thread read a whole-Hash, whole-row dup snapshot
+    # (CliUserInterface#cui_status) and write nothing - the display filters
+    # expired rows out of its own copy and computes :_seen into it. So the
+    # table has one writer and no mutex is needed: every cross-thread access
+    # is a C-level dup that never iterates the live Hash in Ruby code.
     #
     # Returns true when the cell was written, false otherwise.
     def self.apply_gatt_device_name(cui_status, address, name)

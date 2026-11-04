@@ -1674,10 +1674,14 @@ module BlueHydra
           # get the chunks and parse them, track history, update CUI and push
           # to data processing thread. The pop blocks: nothing closes
           # chunk_queue or pushes nil onto it, so the loop runs until this
-          # thread is killed at stop. GATT Device Names waiting on
-          # cui_name_queue are applied at the end of each chunk's body
-          # (drain_cui_names); there is deliberately no pop timeout or poll to
-          # apply them while btmon is quiet - see that method for why.
+          # thread is killed at stop. Per chunk, after the parse and the
+          # result push: GATT Device Names waiting on cui_name_queue are
+          # applied to the CUI table (drain_cui_names), then expired table rows
+          # are deleted (prune_cui_status, at most once per 60 s). Both run
+          # here because this thread is the only writer of cui_status - rows,
+          # names and deletions alike (Requirement 13.15). There is
+          # deliberately no pop timeout or poll to run either while btmon is
+          # quiet - see drain_cui_names for why.
           while chunk = chunk_queue.pop do
             p = BlueHydra::Parser.new(chunk.dup)
             p.parse
@@ -1807,6 +1811,7 @@ module BlueHydra
             end
 
             drain_cui_names
+            prune_cui_status
           end
         rescue => e
           BlueHydra.logger.error("Parser thread #{e.message}")
@@ -2180,11 +2185,13 @@ module BlueHydra
     # Why the parser thread and not the result thread, which already handles
     # the Walk result: cui_status is the live operator table, and the result
     # thread sits behind database writes that would delay it. The parser
-    # thread already builds every row (update_cui_status, once per chunk), so
-    # applying the names here keeps the table at one writer, rows and names
-    # alike - the only other party is the CUI thread, which reads the rows and
-    # prunes expired ones at render time with no mutex, the GVL-only posture
-    # that exists today. The result thread never writes cui_status.
+    # thread already builds every row (update_cui_status, once per chunk) and
+    # deletes the expired ones (prune_cui_status, right after this), so
+    # applying the names here keeps the table at one writer - rows, names and
+    # deletions alike (Requirement 13.15). The other parties, the CUI thread
+    # and the file-API thread, read a whole-Hash, whole-row dup snapshot
+    # (CliUserInterface#cui_status) and write nothing, which is why no mutex
+    # is needed. The result thread never writes cui_status.
     #
     # The scanner pushes [address, name] from its Walk threads in the same
     # critical section as the result push, so no pair arrives after shutdown
@@ -2217,6 +2224,46 @@ module BlueHydra
       end
     rescue ThreadError
       # queue empty: every pending name has been applied
+    end
+
+    # Delete the CUI table rows whose device has not been seen for
+    # CliUserInterface::CUI_TIMEOUT seconds (Requirement 13.15). Called on the
+    # parser thread at the end of each chunk's body, after drain_cui_names,
+    # and does its work at most once per 60 s (@cui_last_prune); the rest of
+    # the calls return at the clock check.
+    #
+    # This moved here from CliUserInterface#cui_status, which ran it on the
+    # CUI thread at render time. That put a second writer on cui_status, and
+    # the two collided: the render-time prune could delete a row that
+    # update_cui_status was midway through its statements on, the parser
+    # thread raised on the vanished row, the rescue swallowed it, and that
+    # chunk's table update was lost. With the deletion here, the parser thread
+    # is the only writer of cui_status - rows (update_cui_status), names
+    # (drain_cui_names) and deletions - and the readers, the CUI thread and the
+    # file-API thread, take a whole-Hash, whole-row dup snapshot and write
+    # nothing, so no mutex is needed. delete_if over the live Hash is safe for
+    # the same reason: nothing else iterates or mutates it.
+    #
+    # The display filters expired rows out of its own snapshot (the same
+    # cutoff), so what the operator sees does not depend on when this last
+    # ran: a row leaves the display on the renderer's cadence and leaves the
+    # structure on this one, and the two are independent. The :created
+    # fallback covers a row update_cui_status has created ({created: ...})
+    # but not yet stamped with :last_seen; it is brand new, so it is kept. In
+    # file mode (BlueHydra.config["file"]) every row is kept, as the old
+    # CUI-thread prune did, and the display keeps showing them too.
+    def prune_cui_status
+      return if BlueHydra.config["file"]
+
+      now = Time.now.to_i
+      return unless @cui_last_prune.nil? || now - @cui_last_prune >= 60
+
+      @cui_last_prune = now
+      cutoff = now - BlueHydra::CliUserInterface::CUI_TIMEOUT
+      cui_status.delete_if do |_uuid, row|
+        seen = row[:last_seen] || row[:created]
+        seen.is_a?(Numeric) && seen < cutoff
+      end
     end
 
     # The Reset_Deferral (Requirements 3.9 to 3.12): block the discovery thread

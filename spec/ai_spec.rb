@@ -1716,6 +1716,171 @@ describe "BlueHydra::Runner helpers" do
     end
   end
 
+  # The parser thread is the only writer of cui_status, deletions included:
+  # prune_cui_status runs there at the end of each chunk's body, after
+  # drain_cui_names. It used to run on the CUI thread at render time
+  # (CliUserInterface#cui_status), which could delete a row update_cui_status
+  # was midway through. The display now filters expired rows out of its own
+  # snapshot, so the two cadences are independent and the structure's prune
+  # needs no coordination with the renderer.
+  describe "prune_cui_status (Requirement 13.15)" do
+    let(:timeout) { BlueHydra::CliUserInterface::CUI_TIMEOUT }
+    let(:now)     { Time.now.to_i }
+
+    def with_file_config(value)
+      original_file = BlueHydra.config["file"]
+      BlueHydra.config["file"] = value
+      yield
+    ensure
+      BlueHydra.config["file"] = original_file
+    end
+
+    def row(address, extra = {})
+      { address: address, lap: address.split(":")[3, 3].join(":"), vers: "BTLE", rssi: "-50 " }.merge(extra)
+    end
+
+    def runner_with_rows(rows)
+      runner = BlueHydra::Runner.new
+      runner.cui_status = rows
+      runner
+    end
+
+    it "deletes rows whose :last_seen is older than CUI_TIMEOUT and keeps fresh ones" do
+      with_file_config(false) do
+        runner = runner_with_rows(
+          "fresh"   => row("AA:BB:CC:DD:EE:50", created: now - 10,          last_seen: now - 10),
+          "recent"  => row("AA:BB:CC:DD:EE:51", created: now - timeout + 5, last_seen: now - timeout + 5),
+          "expired" => row("AA:BB:CC:DD:EE:52", created: now - timeout - 5, last_seen: now - timeout - 5),
+          "ancient" => row("AA:BB:CC:DD:EE:53", created: now - 10_000,      last_seen: now - 10_000)
+        )
+
+        runner.send(:prune_cui_status)
+
+        expect(runner.cui_status.keys).to match_array(["fresh", "recent"])
+      end
+    end
+
+    it "falls back to :created for a row without :last_seen yet" do
+      with_file_config(false) do
+        runner = runner_with_rows(
+          "new"   => { created: now - 1 },          # just created, not yet stamped
+          "stale" => { created: now - timeout - 1 } # created long ago, never stamped
+        )
+
+        runner.send(:prune_cui_status)
+
+        expect(runner.cui_status.keys).to eq(["new"])
+      end
+    end
+
+    it "is a no-op within 60 s of its last run" do
+      with_file_config(false) do
+        runner = runner_with_rows("fresh" => row("AA:BB:CC:DD:EE:54", created: now, last_seen: now))
+
+        runner.send(:prune_cui_status)
+        runner.cui_status["late"] = row("AA:BB:CC:DD:EE:55", created: now - 10_000, last_seen: now - 10_000)
+        runner.send(:prune_cui_status)
+
+        expect(runner.cui_status.keys).to match_array(["fresh", "late"])
+      end
+    end
+
+    it "runs again once 60 s have passed since its last run" do
+      with_file_config(false) do
+        runner = runner_with_rows("fresh" => row("AA:BB:CC:DD:EE:56", created: now, last_seen: now))
+
+        runner.send(:prune_cui_status)
+        runner.instance_variable_set(:@cui_last_prune, now - 60)
+        runner.cui_status["late"] = row("AA:BB:CC:DD:EE:57", created: now - 10_000, last_seen: now - 10_000)
+        runner.send(:prune_cui_status)
+
+        expect(runner.cui_status.keys).to eq(["fresh"])
+      end
+    end
+
+    it "is a no-op when reading from a file (BlueHydra.config[\"file\"])" do
+      with_file_config("some.log") do
+        runner = runner_with_rows(
+          "fresh"   => row("AA:BB:CC:DD:EE:58", created: now, last_seen: now),
+          "expired" => row("AA:BB:CC:DD:EE:59", created: now - 10_000, last_seen: now - 10_000)
+        )
+
+        runner.send(:prune_cui_status)
+
+        expect(runner.cui_status.keys).to match_array(["fresh", "expired"])
+        expect(runner.instance_variable_get(:@cui_last_prune)).to be_nil
+      end
+    end
+
+    # Driven through the shipped start_parser_thread on the Runner's own
+    # queues: the chunk's parse, update_cui_status, drain_cui_names and the
+    # prune all run on the parser thread, so an expired row present before the
+    # chunk is gone after it, and the chunk's own row is there. spec_helper
+    # runs with daemon_mode true and file_api false (the CUI inactive), so the
+    # CUI is switched on here the way the other parser-thread groups do.
+    describe "on the parser thread" do
+      let(:chunked) { "AA:BB:CC:DD:EE:5A" }
+      let(:runner)  { BlueHydra::Runner.new }
+
+      def le_chunk(address)
+        [
+          "> HCI Event: LE Meta Event (0x3e) plen 1",
+          "      LE Advertising Report (0x02)",
+          "        Address: #{address} (OUI)",
+          "last_seen: #{Time.now.to_i}"
+        ]
+      end
+
+      def wait_until(what, timeout: 2)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+        until yield
+          raise "timed out waiting for #{what}" if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
+          sleep 0.01
+        end
+      end
+
+      before do
+        allow(BlueHydra).to receive(:daemon_mode).and_return(false)
+        allow(BlueHydra).to receive(:file_api).and_return(false)
+        allow(BlueHydra).to receive(:send_event)
+        runner.chunk_queue    = Queue.new
+        runner.cui_name_queue = Queue.new
+        runner.result_queue   = Queue.new
+        runner.cui_status     = {
+          "expired" => row("AA:BB:CC:DD:EE:5B", created: now - 10_000, last_seen: now - 10_000),
+          "fresh"   => row("AA:BB:CC:DD:EE:5C", created: now - 5,      last_seen: now - 5)
+        }
+      end
+
+      after do
+        thread = runner.parser_thread
+        if thread
+          thread.kill
+          thread.join(2)
+        end
+      end
+
+      it "a chunk triggers the prune: the expired row is gone after it, the fresh and chunked rows remain" do
+        with_file_config(false) do
+          runner.start_parser_thread
+          runner.chunk_queue.push([le_chunk(chunked)])
+
+          attrs = runner.result_queue.pop(timeout: 2)
+          expect(attrs).not_to be_nil
+          expect(attrs[:address]).to eq([chunked])
+
+          wait_until("the prune after the chunk") { !runner.cui_status.key?("expired") }
+
+          expect(runner.cui_status.keys).to include("fresh")
+          expect(runner.cui_status.values.map { |r| r[:address] }).to include(chunked)
+          expect(runner.cui_status.size).to eq(2)
+          expect(runner.parser_thread).to be_alive
+        end
+      end
+    end
+  end
+
   it "scan_with_reset_retry does not reset when the connect succeeds" do
     runner = BlueHydra::Runner.new
     expect(runner).not_to receive(:hci_reset)
@@ -1852,17 +2017,116 @@ describe BlueHydra::CliUserInterface do
     BlueHydra.info_scan = original
   end
 
-  it "expires stale devices out of cui_status" do
-    original_file = BlueHydra.config["file"]
-    BlueHydra.config["file"] = false
-    runner = CuiFakeRunner.new
-    runner.cui_status["keep"]   = device_status(last_seen: Time.now.to_i)
-    runner.cui_status["expire"] = device_status(last_seen: Time.now.to_i - 10_000)
-    cui = BlueHydra::CliUserInterface.new(runner)
-    result = cui.cui_status
-    expect(result).to have_key("keep")
-    expect(result).to_not have_key("expire")
-    BlueHydra.config["file"] = original_file
+  # The single-writer shape (Requirements 13.15, 13.16): the parser thread is
+  # the only thread that writes the runner's cui_status, deletions included
+  # (Runner#prune_cui_status). CliUserInterface#cui_status is the readers' view,
+  # a whole-Hash, whole-row copy with expired rows filtered out and :_seen
+  # computed into the copy, so neither render_cui nor api_loop touches a live
+  # row.
+  describe "the display snapshot (cui_status)" do
+    def with_file_config(value)
+      original_file = BlueHydra.config["file"]
+      BlueHydra.config["file"] = value
+      yield
+    ensure
+      BlueHydra.config["file"] = original_file
+    end
+
+    def seeded_runner
+      runner = CuiFakeRunner.new
+      runner.cui_status["keep"]   = device_status(last_seen: Time.now.to_i, address: "AA:BB:CC:DD:EE:40")
+      runner.cui_status["expire"] = device_status(last_seen: Time.now.to_i - 10_000, address: "AA:BB:CC:DD:EE:41")
+      runner
+    end
+
+    it "leaves expired rows out of the display snapshot while runner.cui_status keeps them" do
+      with_file_config(false) do
+        runner = seeded_runner
+        cui = BlueHydra::CliUserInterface.new(runner)
+
+        result = cui.cui_status
+
+        expect(result).to have_key("keep")
+        expect(result).to_not have_key("expire")
+        # no deletion from the live table: that is the parser thread's job
+        expect(runner.cui_status.keys).to match_array(["keep", "expire"])
+        # a copy all the way down, not a view onto the runner's Hash or rows
+        expect(result).to_not be(runner.cui_status)
+        expect(result["keep"]).to_not be(runner.cui_status["keep"])
+      end
+    end
+
+    it "computes :_seen into the snapshot rows and render_cui writes none into the runner's rows" do
+      with_file_config(false) do
+        runner = seeded_runner
+        cui = BlueHydra::CliUserInterface.new(runner)
+
+        silence_stdout do
+          cui.render_cui(40, :_seen, "ascending", printable_keys.dup, :disabled)
+        end
+
+        expect(runner.cui_status.values.none? { |r| r.key?(:_seen) }).to be true
+        snapshot = cui.cui_status
+        expect(snapshot.keys).to eq(["keep"])
+        expect(snapshot["keep"][:_seen]).to match(/\A \+\d+s\z/)
+      end
+    end
+
+    it "keeps the expired row in the snapshot when reading from a file" do
+      with_file_config("some.log") do
+        runner = seeded_runner
+        cui = BlueHydra::CliUserInterface.new(runner)
+
+        result = cui.cui_status
+
+        expect(result.keys).to match_array(["keep", "expire"])
+        expect(result["expire"][:_seen]).to match(/\A \+\d+s\z/)
+      end
+    end
+
+    # update_cui_status creates the row ({created: ...}) a few statements
+    # before it fills :last_seen, and a snapshot taken in that window sees the
+    # row without it. It is brand new, so it cannot be expired.
+    it "keeps a row with no :last_seen yet and gives it no :_seen" do
+      with_file_config(false) do
+        runner = CuiFakeRunner.new
+        runner.cui_status["fresh"] = { created: Time.now.to_i, lap: "DD:EE:42", vers: "BTLE" }
+        cui = BlueHydra::CliUserInterface.new(runner)
+
+        result = cui.cui_status
+
+        expect(result).to have_key("fresh")
+        expect(result["fresh"]).to_not have_key(:_seen)
+        expect(runner.cui_status["fresh"]).to_not have_key(:_seen)
+      end
+    end
+
+    it "api_loop writes the snapshot: JSON carries _seen and omits the expired row" do
+      with_file_config(false) do
+        runner = seeded_runner
+        cui = BlueHydra::CliUserInterface.new(runner)
+        payloads = []
+        # Capture the first device-table write, then end the loop. Kernel#loop
+        # returns on StopIteration, so api_loop exits without reaching its
+        # rescue; the stubs below only matter if it does.
+        allow(File).to receive(:write) do |path, data|
+          payloads << data if path == "/dev/shm/blue_hydra.json"
+          raise StopIteration
+        end
+        allow(BlueHydra.logger).to receive(:error)
+        allow(BlueHydra).to receive(:send_event)
+
+        cui.api_loop
+
+        expect(payloads.size).to eq(1)
+        parsed = JSON.parse(payloads.first)
+        expect(parsed.keys).to eq(["keep"])
+        expect(parsed["keep"]["_seen"]).to match(/\A \+\d+s\z/)
+        # and the live table was neither pruned nor annotated
+        expect(runner.cui_status.keys).to match_array(["keep", "expire"])
+        expect(runner.cui_status["keep"]).to_not have_key(:_seen)
+      end
+    end
   end
 
   it "renders an empty device table" do

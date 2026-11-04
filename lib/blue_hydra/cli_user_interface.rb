@@ -6,31 +6,58 @@ module BlueHydra
   class CliUserInterface
     attr_accessor :runner, :cui_timeout, :l2ping_threshold
 
+    # Seconds since a device's last sighting after which it leaves the device
+    # table. Shared with Runner#prune_cui_status, which deletes expired rows
+    # from the live structure on the parser thread, so the display's filter and
+    # the structure's prune agree on what "expired" means.
+    CUI_TIMEOUT = 300
+
     # When we initialize this CUI we pass the runner which allows us to pull
     # information about the threads and queues for our own purposes
-    def initialize(runner, cui_timeout=300)
+    def initialize(runner, cui_timeout = CUI_TIMEOUT)
       @runner = runner
       @cui_timeout = cui_timeout
       @l2ping_threshold = (@cui_timeout - 45)
     end
 
+    # The display snapshot of the device table: a private copy of the runner's
+    # cui_status with expired rows left out and the display-only :_seen cell
+    # computed in. Both render_cui and api_loop read the table through this.
+    #
+    # The parser thread is the table's only writer (Requirement 13.15): it
+    # creates and updates rows, applies GATT names, and deletes expired rows in
+    # Runner#prune_cui_status. This method is the readers' view (Requirement
+    # 13.16) and writes nothing. It used to prune the live Hash itself from the
+    # CUI thread, which could delete a row while update_cui_status was midway
+    # through its statements on that row; and api_loop's JSON.generate used to
+    # iterate the live Hash while the parser thread inserted ("can't add a new
+    # key into hash during iteration").
+    #
+    # No mutex: the whole-Hash dup and each row dup are single C-level copies
+    # that run atomically under the GVL, so neither iterates the live Hash in
+    # Ruby code while the parser thread inserts. Everything after them touches
+    # only the copy.
+    #
+    # Because the structural deletion now runs on the parser thread's cadence
+    # (at most once per 60 s, after a chunk), the display must filter for
+    # itself to show only devices seen within the timeout; otherwise a row
+    # could linger on screen for up to a minute past its expiry. A row with no
+    # :last_seen yet (update_cui_status creates the row before it fills that
+    # cell) is kept, and gets no :_seen.
     def cui_status
-      #this gets called a lot, but we need it to always be clean.
-      #let it auto clean itself on call, at most once every 60 seconds.
-      @last_clean ||= 0
-      if Time.now.to_i - @last_clean > 59
-        # remove devices from the cui_status which have expired
-        unless BlueHydra.config["file"]
-          @runner.cui_status.keys.select do |x|
-            @runner.cui_status[x][:last_seen] < (Time.now.to_i - cui_timeout)
-          end.each do |x|
-            @runner.cui_status.delete(x)
-          end
-        end
-        @last_clean = Time.now.to_i
+      now  = Time.now.to_i
+      rows = @runner.cui_status.dup.transform_values(&:dup)
+
+      unless BlueHydra.config["file"]
+        cutoff = now - cui_timeout
+        rows.reject! { |_uuid, row| row[:last_seen] && row[:last_seen] < cutoff }
       end
 
-      return @runner.cui_status
+      rows.each_value do |row|
+        row[:_seen] = " +#{now - row[:last_seen]}s" if row[:last_seen]
+      end
+
+      rows
     end
 
     # the following methods are simply alliasing data to be passed through from
@@ -334,6 +361,12 @@ HELP
 
     # this method gets called over and over in the cui loop to print the data
     # table as json to a file for a web interface.  Someone thought this was a good idea.
+    #
+    # The JSON is generated from the display snapshot (cui_status), never from
+    # the runner's live table, so this thread writes nothing into cui_status and
+    # never iterates it while the parser thread inserts. Every row therefore
+    # carries _seen; before, it appeared only when a CUI render had happened to
+    # write it into the live row.
     def api_loop
       begin
         loop do
@@ -379,6 +412,10 @@ HELP
     #     list of keys to be printed as table headers
     def render_cui(max_height,sort,order,printable_keys,filter_mode)
       begin
+
+        # one display snapshot per render (see cui_status): everything below
+        # reads rows and never touches the runner's live table
+        rows = cui_status
 
         # skip if we are reading from a file
         unless BlueHydra.config["file"]
@@ -512,13 +549,12 @@ HELP
           range: :right
         }
 
-        # nothing to do if cui_status is empty (no devices or all expired)
-        unless cui_status.empty?
+        # nothing to do if the snapshot is empty (no devices or all expired)
+        unless rows.empty?
 
           # for each of the values we need to
-          cui_status.values.each do |hsh|
-            # fake a :_seen key with info derived from the :last_seen value
-            hsh[:_seen] = " +#{Time.now.to_i - hsh[:last_seen]}s"
+          rows.values.each do |hsh|
+            # :_seen is already in the snapshot row (cui_status computes it)
             # loop through the keys and figure out what the max value for the
             # width of the column is. This includes the length of the actual
             # header key itself
@@ -586,7 +622,7 @@ HELP
 
           # customize some of the sort options to handle integer values
           # which may be string wrapped in strange ways
-          d = cui_status.values.sort_by do |x|
+          d = rows.values.sort_by do |x|
             if sort == :rssi || sort == :_seen
               x[sort].to_s.strip.to_i
             elsif sort == :range
@@ -639,7 +675,9 @@ HELP
 
             #prevent classic devices from expiring by forcing them onto the l2ping queue
             unless BlueHydra.config["file"]
-              if data[:vers] =~ /cl/i
+              # a snapshot row may not have :last_seen yet (see cui_status);
+              # it cannot be stale, so skip it rather than compare nil
+              if data[:vers] =~ /cl/i && data[:last_seen]
                 ping_time = (Time.now.to_i - l2ping_threshold)
                 query_history[data[:address]] ||= {}
                 if (query_history[data[:address]][:l2ping].to_i < ping_time) && (data[:last_seen] < ping_time)
