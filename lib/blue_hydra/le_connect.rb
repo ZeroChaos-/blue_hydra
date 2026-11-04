@@ -117,20 +117,49 @@ module BlueHydra
       Errno::ENOSYS
     ].freeze
 
+    # Errors that mean the LOCAL controller refused the connect because it has no
+    # connection slot left, which says nothing about the device.
+    #
+    # bt_to_errno() (net/bluetooth/lib.c) maps HCI 0x09 Connection Limit Exceeded
+    # to EMLINK. It maps 0x0a to EMLINK as well, but that is the Synchronous
+    # (SCO/eSCO) limit and cannot come back from an LE create connection, so here
+    # EMLINK reads as 0x09. Nothing in net/bluetooth/hci_conn.c raises EMLINK of
+    # its own; it only ever arrives through that translation.
+    #
+    # Its own outcome rather than :error or :unreachable, because the GATT Walks
+    # hold Links open past our own hold (each Att_Bearer keeps a reference on its
+    # Link), and a controller whose LE slots they have used up would otherwise
+    # look like devices failing. The Runner counts it as conn-limit and records
+    # no ConnectTracker strike: the refusal is ours, not the device's. Until this
+    # entry both paths filed it as :error - raised, through #connect's rescue;
+    # via SO_ERROR, through classify_errno's unclassified fallback.
+    CONN_LIMIT_ERRORS = [Errno::EMLINK].freeze
+
+    # The handoff source the Gatt_Scanner records for Links raised here, as
+    # opposed to :auto for the kernel auto-connect list (Runner).
+    GATT_HANDOFF_SOURCE = :direct
+
+    # Injected so specs and the Runner can see what this connector was wired
+    # with; nil when gatt_scan is false.
+    attr_reader :gatt_scanner
+
     # == Parameters
     #   hci_index       :: controller index (the N in hciN)
     #   connect_timeout :: per-device bound on the connect attempt
     #   link_hold       :: how long to hold a live link open
+    #   gatt_scanner    :: a BlueHydra::GattScanner to hand each raised Link to,
+    #                      or nil (gatt_scan false) for no handoff at all
     def initialize(hci_index, connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-                   link_hold: DEFAULT_LINK_HOLD)
+                   link_hold: DEFAULT_LINK_HOLD, gatt_scanner: nil)
       @index           = hci_index
       @connect_timeout = connect_timeout
       @link_hold       = link_hold
+      @gatt_scanner    = gatt_scanner
     end
 
     # Connect to every device in +entries+ (an address => mgmt address_type map),
     # one thread per device, and return {address => outcome} where outcome is
-    # :connected, :unreachable, :error or :abandoned.
+    # :connected, :unreachable, :conn_limit, :error or :abandoned.
     #
     # +deadline+ is positional rather than a keyword on purpose: the first
     # parameter is a Hash, and adding any keyword to such a method silently
@@ -223,12 +252,22 @@ module BlueHydra
     end
 
     # Connect to a single device and hold the link briefly. Returns :connected,
-    # :unreachable or :error. Never raises, and always closes the socket - an
-    # open socket keeps the ACL up, which would compete with the next scan.
+    # :unreachable, :conn_limit or :error. Never raises, and always closes the
+    # socket - an open socket keeps the ACL up, which would compete with the next
+    # scan.
+    #
+    # A raised Link is handed to the Gatt_Scanner before the hold starts, so its
+    # Att_Bearer connect lands while our socket is still holding the Link up. The
+    # handoff only does bookkeeping and spawns the Walk thread, so the hold, the
+    # close and the outcome are exactly what they are with no scanner: the Walk
+    # never lengthens the batch.
     def connect(address, address_type)
       sock = open_socket
       outcome = attempt_connect(sock, sockaddr(address, address_type))
-      hold_link if outcome == :connected
+      if outcome == :connected
+        handoff_to_gatt(address, address_type)
+        hold_link
+      end
       outcome
     rescue IOError, SystemCallError => e
       BlueHydra.logger.debug("le_connect: #{address} failed: #{e.message}")
@@ -238,6 +277,19 @@ module BlueHydra
     end
 
     private
+
+    # Hand a raised Link to the Gatt_Scanner, with the address type we connected
+    # with. Best effort: a scanner that raises is logged and the connect carries
+    # on exactly as it would with no scanner. The rescue has to be here rather
+    # than left to #connect's, which would turn a scanner fault into :error and
+    # skip the hold on a Link that came up fine.
+    def handoff_to_gatt(address, address_type)
+      scanner = gatt_scanner
+      return unless scanner
+      scanner.handoff(address, address_type, source: GATT_HANDOFF_SOURCE)
+    rescue => e
+      BlueHydra.logger.error("gatt: handoff for #{address} raised #{e.class}: #{e.message}")
+    end
 
     # Non-blocking connect. connect_nonblock raises IO::WaitWritable while the
     # kernel is scanning for the device and establishing the link; we then wait
@@ -252,6 +304,8 @@ module BlueHydra
       :connected
     rescue *UNREACHABLE_ERRORS
       :unreachable
+    rescue *CONN_LIMIT_ERRORS
+      :conn_limit
     end
 
     # Read the result of a completed non-blocking connect from SO_ERROR.
@@ -282,6 +336,7 @@ module BlueHydra
       error = SystemCallError.new(nil, errno)
       return :connected   if CONNECTED_ERRORS.any?   { |klass| error.is_a?(klass) }
       return :unreachable if UNREACHABLE_ERRORS.any? { |klass| error.is_a?(klass) }
+      return :conn_limit  if CONN_LIMIT_ERRORS.any?  { |klass| error.is_a?(klass) }
       BlueHydra.logger.debug(
         "le_connect: unclassified connect errno #{errno} (#{error.class}: #{error.message})"
       )

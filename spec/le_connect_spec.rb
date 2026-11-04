@@ -77,6 +77,7 @@ describe BlueHydra::LeConnect do
         Errno::EHOSTDOWN::Errno    => :unreachable,
         Errno::ECONNRESET::Errno   => :unreachable,
         Errno::ENOSYS::Errno       => :unreachable, # HCI 0x3e, see below
+        Errno::EMLINK::Errno       => :conn_limit,  # HCI 0x09, our controller is full
         Errno::EPERM::Errno        => :error        # genuinely unclassified
       }.each do |errno, expected|
         allow(sock).to receive(:connect_nonblock).and_raise(wait_writable_error)
@@ -166,6 +167,198 @@ describe BlueHydra::LeConnect do
 
       fresh = BlueHydra::LeConnect.new(0, connect_timeout: 1, link_hold: 0)
       expect(fresh.connect("7A:BB:CC:DD:EE:FF", BlueHydra::Mgmt::LE_RANDOM)).to eq(:connected)
+    end
+  end
+
+  # EMLINK is the LOCAL controller out of LE connection slots: bt_to_errno maps
+  # HCI 0x09 Connection Limit Exceeded onto it, and nothing else on the LE
+  # connect path raises it. It says nothing about the device, so it gets its own
+  # outcome - the Runner counts it as conn-limit and records no ConnectTracker
+  # strike. Until it did, both routes below filed it as :error.
+  describe "#connect at the controller's connection limit" do
+    it "reports :conn_limit when connect_nonblock raises EMLINK" do
+      allow(sock).to receive(:connect_nonblock).and_raise(Errno::EMLINK)
+      expect(connector).not_to receive(:hold_link)
+
+      expect(connector.connect("7A:BB:CC:DD:EE:FF", BlueHydra::Mgmt::LE_RANDOM)).to eq(:conn_limit)
+      expect(sock).to have_received(:close)
+    end
+
+    it "reports :conn_limit when EMLINK arrives via SO_ERROR, ahead of the unclassified fallback" do
+      allow(sock).to receive(:connect_nonblock).and_raise(wait_writable_error)
+      allow(connector).to receive(:wait_writable).and_return(true)
+      allow(sock).to receive(:getsockopt).and_return(so_error(Errno::EMLINK::Errno))
+      expect(connector).not_to receive(:hold_link)
+      # the fallback is the only thing in classify_errno that logs
+      allow(BlueHydra.logger).to receive(:debug)
+      expect(BlueHydra.logger).not_to receive(:debug).with(/unclassified/)
+
+      expect(connector.connect("7A:BB:CC:DD:EE:FF", BlueHydra::Mgmt::LE_RANDOM)).to eq(:conn_limit)
+      expect(sock).to have_received(:close)
+    end
+  end
+
+  describe "#gatt_scanner" do
+    it "is nil unless one is injected - which is how gatt_scan false reaches this class" do
+      expect(connector.gatt_scanner).to be_nil
+    end
+
+    it "exposes the injected scanner, so the Runner wiring can be checked" do
+      scanner = instance_double("BlueHydra::GattScanner")
+      wired   = BlueHydra::LeConnect.new(0, connect_timeout: 1, link_hold: 0, gatt_scanner: scanner)
+      expect(wired.gatt_scanner).to be(scanner)
+    end
+  end
+
+  # The Direct_Connect_Path handoff. A Link that came up is handed to the
+  # Gatt_Scanner BEFORE the hold, so the Walk's Att_Bearer connect lands while
+  # our socket is still holding the Link up. The handoff is bookkeeping only, so
+  # the hold, the close and the outcome must be exactly what they are with no
+  # scanner at all - a Walk must never lengthen a direct-connect batch.
+  describe "#connect handoff to the Gatt_Scanner" do
+    let(:scanner) { instance_double("BlueHydra::GattScanner") }
+    let(:connector) do
+      BlueHydra::LeConnect.new(0, connect_timeout: 1, link_hold: 0, gatt_scanner: scanner)
+    end
+    let(:address) { "7A:BB:CC:DD:EE:FF" }
+
+    before { allow(scanner).to receive(:handoff) }
+
+    it "hands off the address and the address type it connected with, tagged :direct" do
+      allow(sock).to receive(:connect_nonblock).and_return(0)
+
+      connector.connect(address, BlueHydra::Mgmt::LE_PUBLIC)
+
+      expect(scanner).to have_received(:handoff)
+        .with(address, BlueHydra::Mgmt::LE_PUBLIC, source: :direct).once
+    end
+
+    it "hands off after the connect resolves and before the hold begins" do
+      order = []
+      allow(sock).to receive(:connect_nonblock) { order << :connect; 0 }
+      allow(scanner).to receive(:handoff)      { order << :handoff }
+      allow(connector).to receive(:hold_link)  { order << :hold }
+
+      connector.connect(address, BlueHydra::Mgmt::LE_RANDOM)
+
+      expect(order).to eq([:connect, :handoff, :hold])
+    end
+
+    it "hands off on every route to :connected, not only the immediate one" do
+      routes = {
+        "immediate"             => -> { allow(sock).to receive(:connect_nonblock).and_return(0) },
+        "ECONNREFUSED raised"   => -> { allow(sock).to receive(:connect_nonblock).and_raise(Errno::ECONNREFUSED) },
+        "SO_ERROR 0"            => lambda do
+          allow(sock).to receive(:connect_nonblock).and_raise(wait_writable_error)
+          allow(connector).to receive(:wait_writable).and_return(true)
+          allow(sock).to receive(:getsockopt).and_return(so_error(0))
+        end,
+        "SO_ERROR ECONNREFUSED" => lambda do
+          allow(sock).to receive(:connect_nonblock).and_raise(wait_writable_error)
+          allow(connector).to receive(:wait_writable).and_return(true)
+          allow(sock).to receive(:getsockopt).and_return(so_error(Errno::ECONNREFUSED::Errno))
+        end
+      }
+
+      handoffs = 0
+      allow(scanner).to receive(:handoff) { handoffs += 1 }
+
+      routes.each_with_index do |(route, arrange), i|
+        arrange.call
+        expect(connector.connect(address, BlueHydra::Mgmt::LE_RANDOM))
+          .to eq(:connected), "#{route} should reach :connected"
+        expect(handoffs).to eq(i + 1), "#{route} should hand off exactly once"
+      end
+    end
+
+    it "makes no handoff for a Link that did not come up" do
+      allow(sock).to receive(:connect_nonblock).and_raise(Errno::EHOSTDOWN)
+      expect(connector.connect(address, BlueHydra::Mgmt::LE_RANDOM)).to eq(:unreachable)
+
+      allow(sock).to receive(:connect_nonblock).and_raise(Errno::EMLINK)
+      expect(connector.connect(address, BlueHydra::Mgmt::LE_RANDOM)).to eq(:conn_limit)
+
+      expect(scanner).not_to have_received(:handoff)
+    end
+
+    # Requirements 2.2 and 3.8, checked by direct comparison: the same link_hold
+    # slept and no longer, the socket closed once, the same outcome. sleep is
+    # recorded rather than hold_link stubbed so the DURATION is what is compared.
+    it "holds, closes and returns exactly as it does with no scanner" do
+      allow(sock).to receive(:connect_nonblock).and_return(0)
+
+      observe = lambda do |le_connect|
+        slept = []
+        allow(le_connect).to receive(:open_socket).and_return(sock)
+        allow(le_connect).to receive(:sleep) { |seconds| slept << seconds }
+        [le_connect.connect(address, BlueHydra::Mgmt::LE_RANDOM), slept]
+      end
+
+      without = observe.call(BlueHydra::LeConnect.new(0, connect_timeout: 1, link_hold: 0.25))
+      with    = observe.call(BlueHydra::LeConnect.new(0, connect_timeout: 1, link_hold: 0.25,
+                                                      gatt_scanner: scanner))
+
+      expect(without).to eq([:connected, [0.25]])
+      expect(with).to eq(without)
+      expect(sock).to have_received(:close).twice
+      expect(scanner).to have_received(:handoff).once
+    end
+
+    it "logs a scanner that raises and still holds, closes and returns :connected" do
+      allow(sock).to receive(:connect_nonblock).and_return(0)
+      allow(scanner).to receive(:handoff).and_raise(RuntimeError, "boom")
+      allow(BlueHydra.logger).to receive(:error)
+      expect(connector).to receive(:hold_link).once
+
+      expect(connector.connect(address, BlueHydra::Mgmt::LE_RANDOM)).to eq(:connected)
+      expect(sock).to have_received(:close)
+      expect(BlueHydra.logger).to have_received(:error)
+        .with("gatt: handoff for #{address} raised RuntimeError: boom")
+    end
+
+    # The rescue has to live in the handoff itself. #connect's own rescue maps
+    # SystemCallError to :error and skips the hold, which would charge a scanner
+    # fault to a Link that came up fine.
+    it "does not let a scanner raising a SystemCallError turn the connect into :error" do
+      allow(sock).to receive(:connect_nonblock).and_return(0)
+      allow(scanner).to receive(:handoff).and_raise(Errno::EBADF)
+      allow(BlueHydra.logger).to receive(:error)
+      expect(connector).to receive(:hold_link).once
+
+      expect(connector.connect(address, BlueHydra::Mgmt::LE_RANDOM)).to eq(:connected)
+      expect(BlueHydra.logger).to have_received(:error).with(/gatt: handoff for #{address} raised Errno::EBADF/)
+    end
+
+    it "makes no call at all with gatt_scanner nil" do
+      plain = BlueHydra::LeConnect.new(0, connect_timeout: 1, link_hold: 0)
+      allow(plain).to receive(:open_socket).and_return(sock)
+      allow(sock).to receive(:connect_nonblock).and_return(0)
+      # a call on nil would raise NoMethodError into the handoff's rescue and be
+      # logged there, so a silent connect is the proof that nothing was called
+      expect(BlueHydra.logger).not_to receive(:error)
+
+      expect(plain.connect(address, BlueHydra::Mgmt::LE_RANDOM)).to eq(:connected)
+      expect(scanner).not_to have_received(:handoff)
+    end
+
+    it "hands off only the Links that came up in a mixed connect_batch" do
+      up      = "7A:00:00:00:00:01"
+      limited = "7A:00:00:00:00:02"
+      allow(sock).to receive(:connect_nonblock) do |addr|
+        # struct sockaddr_l2 { family; psm; bdaddr[6]; cid; bdaddr_type }
+        _family, _psm, bdaddr, _cid, _type = addr.unpack("S!S!a6S!C")
+        raise Errno::EMLINK if bdaddr == BlueHydra::Mgmt.pack_address(limited)
+        0
+      end
+
+      results = connector.connect_batch({
+        up      => BlueHydra::Mgmt::LE_RANDOM,
+        limited => BlueHydra::Mgmt::LE_RANDOM
+      })
+
+      expect(results).to eq(up => :connected, limited => :conn_limit)
+      expect(scanner).to have_received(:handoff).once
+      expect(scanner).to have_received(:handoff).with(up, BlueHydra::Mgmt::LE_RANDOM, source: :direct)
     end
   end
 
