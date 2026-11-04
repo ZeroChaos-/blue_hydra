@@ -529,3 +529,33 @@ Open items
     store was empty when it landed, but the next change to that format will not get
     that for free.
 
+
+
+--------------------------------------------------------------------------------
+16. GATT: use Bluetooth SIG Assigned Numbers data (name fallback, appearance, units)
+--------------------------------------------------------------------------------
+- Deferred from the GATT service scanning feature (item 6). That feature ships with
+  Nordic's bluetooth-numbers-database ONLY (BSD-3, confirmed redistributable) for
+  service / characteristic / descriptor UUID names.
+- What the SIG assigned-numbers data would add, and how each is handled meanwhile:
+  * Fallback UUID names for UUIDs Nordic does not list (the SIG set is authoritative
+    and more complete). Meanwhile: such UUIDs render as "Unknown (<uuid>)".
+  * Appearance (0x2A01) decoding to category/subcategory names. Meanwhile: Appearance
+    is stored as a hex code (0xNNNN).
+  * Characteristic Presentation Format (0x2904) unit names. Meanwhile: a decoded
+    value's unit renders as its 16-bit UUID. The value decode itself needs no SIG
+    data - the device sends the format, and the Format-type enum is a built-in spec
+    constant - so only the unit NAME is deferred.
+- Why it is NOT in the GATT requirements: the SIG assigned-numbers data's licensing
+  is unresolved. The SIG Assigned Numbers document (PDF/HTML) is proprietary, and the
+  SIG public Bitbucket repo content defaults to the SIG Member Terms unless it
+  carries a BSD-3 license - and the assigned_numbers tree carries none - so it is not
+  confirmed redistributable in the shipped image. A legal / OSS sign-off is needed
+  (Amazon is likely a SIG member) before vendoring it. The investigation,
+  options and owners are written up in a licensing report kept in the
+  developer's workspace, outside this repo.
+- When approved: vendor the SIG data beside the Nordic files with its source commit
+  and applicable terms recorded; add the SIG fallback tier to the UUID name lookup
+  (and restore a name-sig / SIG-fallback counter); decode Appearance to category and
+  subcategory; and map 0x2904 Unit UUIDs to names. Nordic stays the preferred source;
+  SIG is the fallback.
