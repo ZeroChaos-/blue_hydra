@@ -11,6 +11,16 @@ ENV["BLUE_HYDRA"] = "test"
 
 require 'blue_hydra'
 
+# The in-memory test database lives only on the pooled connection that created
+# it, so DataObjects' scavenger closing that connection after 60 s idle would
+# drop every table mid-run.
+module NoPoolScavenging
+  def scavenger_interval
+    86_400
+  end
+end
+DataObjects::Pooling.singleton_class.prepend(NoPoolScavenging)
+
 BlueHydra.daemon_mode = true
 BlueHydra.pulse = false
 
