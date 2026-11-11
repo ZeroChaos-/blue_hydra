@@ -46,6 +46,80 @@ describe BlueHydra::Command do
     expect(result[:exit_code]).to be_nil # killed, so no exit status
   end
 
+  it 'sends no event when the timeout kill lands on a live child' do
+    allow(BlueHydra.logger).to receive(:debug)
+    allow(BlueHydra.logger).to receive(:warn)
+    allow(BlueHydra).to receive(:send_event)
+
+    result = BlueHydra::Command.execute3("sleep 10", 1)
+
+    expect(result[:exit_code]).to be_nil # killed
+    expect(BlueHydra).not_to have_received(:send_event)
+    expect(BlueHydra.logger).not_to have_received(:warn)
+  end
+
+  # Only a kill that finds no process means the command completed; any other
+  # failure of the kill is still raised to the caller.
+  it 'raises when the timeout kill is refused' do
+    allow(BlueHydra.logger).to receive(:debug)
+    allow(BlueHydra).to receive(:send_event)
+    allow(Process).to receive(:kill).and_wrap_original do |original, signal, *pids|
+      raise Errno::EPERM if signal == "SIGKILL"
+      original.call(signal, *pids)
+    end
+
+    expect { BlueHydra::Command.execute3("sleep 10", 1) }.to raise_error(Errno::EPERM)
+    expect(BlueHydra).not_to have_received(:send_event)
+  end
+
+  # Seen on a device for `hcitool info` (3 s timeout), and reproducible off-device
+  # only with other threads holding the GVL: the child exits and Open3's waiter
+  # reaps it after the wait loop last saw the waiter alive, so the timeout kill
+  # finds no process. The stub forces that order, then sends the real signal.
+  context 'when the child exits before the timeout kill lands' do
+    let(:kill_errors) { [] }
+
+    def run_with_child_reaped_before_kill(command, timeout)
+      waiter = nil
+      allow(Open3).to receive(:popen3).and_wrap_original do |original, *args|
+        original.call(*args).tap { |result| waiter = result[3] }
+      end
+      allow(Process).to receive(:kill).and_wrap_original do |original, signal, *pids|
+        waiter.join if waiter && pids == [waiter.pid]
+        begin
+          original.call(signal, *pids)
+        rescue Errno::ESRCH => e
+          kill_errors << e
+          raise
+        end
+      end
+      BlueHydra::Command.execute3(command, timeout)
+    end
+
+    before do
+      allow(BlueHydra.logger).to receive(:debug)
+      allow(BlueHydra.logger).to receive(:warn)
+      allow(BlueHydra).to receive(:send_event)
+    end
+
+    it 'treats it as a completed command: no warning, no event' do
+      run_with_child_reaped_before_kill("sleep 3", 1)
+
+      expect(kill_errors.size).to eq(1) # the kill really found no process
+      expect(BlueHydra).not_to have_received(:send_event)
+      expect(BlueHydra.logger).not_to have_received(:warn)
+      expect(BlueHydra.logger).to have_received(:debug)
+        .with(/Command: sleep 3 had already exited when its timeout kill was sent/)
+    end
+
+    it "returns the command's own output and exit code" do
+      result = run_with_child_reaped_before_kill("sleep 3; echo finished; exit 4", 1)
+
+      expect(kill_errors.size).to eq(1)
+      expect(result).to eq(stdout: "finished", exit_code: 4)
+    end
+  end
+
   # Running out of memory is not recoverable here, so it notifies and exits
   # rather than returning a result the caller would have to interpret.
   it 'notifies and exits when the system cannot allocate memory for a command' do

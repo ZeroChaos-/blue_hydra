@@ -44,13 +44,10 @@ module BlueHydra::Command
           begin
             Process.kill(timeout_signal, thread.pid)
           rescue Errno::ESRCH
-            BlueHydra.logger.warn("Command: #{command} exited unnaturally.")
-            BlueHydra.send_event("blue_hydra",
-            {key: 'blue_hydra_command_error',
-            title: 'Blue Hydra subprocess exited unnaturally',
-            message: "Command: #{command} exited unnaturally.",
-            severity: 'WARN'
-            })
+            # The pid is gone only once Open3's waiter has reaped the child, so it
+            # exited on its own between the status check and the kill. Not an
+            # error: thread.value below has its real exit status.
+            BlueHydra.logger.debug("Command: #{command} had already exited when its timeout kill was sent.")
           end
         end
       end
